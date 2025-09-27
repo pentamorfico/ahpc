@@ -101,10 +101,10 @@ class Atoms:
 
 # molecule collection class: holds many Atoms groups, bonds, angles and neighbour lists
 class Molecules:
-    def __init__(self, atoms: List[Atoms], bonds: Bond, angles: Angle, no_mol: int):
+    def __init__(self, atoms: List[Atoms], bonds: List[Bond], angles: List[Angle], no_mol: int):
         self.atoms: List[Atoms] = atoms                          # list of Atoms in the molecule
-        self.bonds: Bond = bonds                                 # the bond potentials, eg for water the left and right bonds
-        self.angles: Angle = angles                              # the angle potentials, for water just the single one, but keep it a list for generality
+        self.bonds: List[Bond] = bonds                           # the bond potentials, eg for water the left and right bonds
+        self.angles: List[Angle] = angles                        # the angle potentials, for water just the single one, but keep it a list for generality
         self.neighbours: np.ndarray = np.zeros((no_mol, N_CLOSEST), dtype=int)  # indices of the neighbours
         self.no_mol: int = no_mol
 
@@ -113,7 +113,7 @@ class Molecules:
 # system class
 class System:
     def __init__(self):
-        self.molecules: List[Molecule] = []  # all the molecules in the system
+        self.molecules: Molecules = None  # all the molecules in the system (SoA structure)
         self.time: float = 0.0  # current simulation time
 
 class Sim_Configuration:
@@ -159,15 +159,20 @@ class Sim_Configuration:
 def BuildNeighborList(sysobj: System):
 
     # We want at most N_CLOSEST neighbors, but no more than number of molecules.
-    target_num = min(N_CLOSEST, max(0, len(sysobj.molecules) - 1))
+    molecules = sysobj.molecules
+    target_num = min(N_CLOSEST, max(0, molecules.no_mol - 1))
 
-    distances2 = np.empty(len(sysobj.molecules)) # array of distances to other molecules
+    distances2 = np.empty(molecules.no_mol) # array of distances to other molecules
 
-    for i in range(len(sysobj.molecules)):     # For each molecule, build the neighbour list
-        sysobj.molecules[i].neighbours.clear() # empty neighbour list of molecule i
-        for j in range(len(sysobj.molecules)):
-            dp = sysobj.molecules[i].atoms[0].p - sysobj.molecules[j].atoms[0].p
-            distances2[j] = mag2(dp)
+    # Clear neighbor lists
+    molecules.neighbours.fill(-1)  # Initialize with -1 (invalid index)
+    
+    for i in range(molecules.no_mol):     # For each molecule, build the neighbour list
+        neighbor_count = 0
+        for j in range(molecules.no_mol):
+            # Use oxygen atom (index 0) position for distance calculation
+            dp = molecules.atoms[0].p[:, i] - molecules.atoms[0].p[:, j]
+            distances2[j] = np.dot(dp, dp)  # squared distance
         distances2[i] = 1e99 # exclude own molecule from neighbour list
 
         # argpartition partition so that target_num indices gives the smallest distances. Ignore the rest
@@ -176,70 +181,93 @@ def BuildNeighborList(sysobj: System):
         # Test if index already exists in the neighbour list of other molecule and if not insert it in neighbour list of molecule i
         for k in index:  # k: molecule nr of the jth close molecule to molecule i
             if k < i:  # neighbour list of molecule k has already been created
-                if i not in sysobj.molecules[k].neighbours:  # molecule i is not in neighbour list of molecule k
-                    sysobj.molecules[i].neighbours.append(k)  # add molecule k to the neighbour list of molecule i
+                # Check if i is already in k's neighbor list
+                if i not in molecules.neighbours[k, :]:  # molecule i is not in neighbour list of molecule k
+                    if neighbor_count < N_CLOSEST:
+                        molecules.neighbours[i, neighbor_count] = k  # add molecule k to the neighbour list of molecule i
+                        neighbor_count += 1
             else:
-                sysobj.molecules[i].neighbours.append(k)  # add molecule k to the neighbour list of molecule i
+                if neighbor_count < N_CLOSEST:
+                    molecules.neighbours[i, neighbor_count] = k  # add molecule k to the neighbour list of molecule i
+                    neighbor_count += 1
 
 # Given a bond, updates the force on all atoms correspondingly
 def UpdateBondForces(sysobj: System):
     global accumulated_forces_bond
-    for molecule in sysobj.molecules:
-        # Loops over the (2 for water) bond constraints
-        for bond in molecule.bonds:
-            atom1 = molecule.atoms[bond.a1]
-            atom2 = molecule.atoms[bond.a2]
-            dp = atom1.p - atom2.p
-            r = mag(dp)
-            # f   = -bond.K*(1-bond.L0/mag(dp))*dp;
-            f = (-bond.K * (1.0 - bond.L0 / r)) * dp
-            atom1.f += f
-            atom2.f -= f
-            accumulated_forces_bond += mag(f)
+    molecules = sysobj.molecules
+    
+    # Process all bonds for all molecules simultaneously
+    for bond in molecules.bonds:
+        # Get atom groups for this bond
+        atom1_group = molecules.atoms[bond.a1]  # e.g., Oxygen atoms
+        atom2_group = molecules.atoms[bond.a2]  # e.g., Hydrogen atoms
+        
+        # Vectorized calculation for all molecules
+        dp = atom1_group.p - atom2_group.p  # shape: (3, no_mol)
+        r = np.sqrt(np.sum(dp * dp, axis=0))  # shape: (no_mol,)
+        
+        # Force calculation: f = -K * (1 - L0/r) * dp
+        force_factor = -bond.K * (1.0 - bond.L0 / r)  # shape: (no_mol,)
+        f = force_factor[np.newaxis, :] * dp  # shape: (3, no_mol)
+        
+        # Apply forces
+        atom1_group.f += f
+        atom2_group.f -= f
+        
+        # Update checksum
+        accumulated_forces_bond += np.sum(np.sqrt(np.sum(f * f, axis=0)))
 
 # Iterates over all angles in molecules and updates forces on atoms correpondingly
 def UpdateAngleForces(sysobj: System):
     global accumulated_forces_angle
-    for molecule in sysobj.molecules:
-        for angle in molecule.angles:
-            #====  angle forces  (H--O---H bonds) U_angle = 0.5*k_a(phi-phi_0)^2
-            # f_H1 = K(phi-ph0)/|H1O|*Ta
-            # f_H2 = K(phi-ph0)/|H2O|*Tc
-            # f_O  = - (f_H1 + f_H2)
-            # Ta = norm(H1O x (H1O x H2O))
-            # Tc = norm(H2O x (H2O x H1O))
-            #=============================================================
-            atom1 = molecule.atoms[angle.a1]
-            atom2 = molecule.atoms[angle.a2]
-            atom3 = molecule.atoms[angle.a3]
+    molecules = sysobj.molecules
+    
+    # Process all angles for all molecules simultaneously  
+    for angle in molecules.angles:
+        #====  angle forces  (H--O---H bonds) U_angle = 0.5*k_a(phi-phi_0)^2
+        # f_H1 = K(phi-ph0)/|H1O|*Ta
+        # f_H2 = K(phi-ph0)/|H2O|*Tc
+        # f_O  = - (f_H1 + f_H2)
+        # Ta = norm(H1O x (H1O x H2O))
+        # Tc = norm(H2O x (H2O x H1O))
+        #=============================================================
+        atom1_group = molecules.atoms[angle.a1]  # H1 atoms
+        atom2_group = molecules.atoms[angle.a2]  # O atoms (center)
+        atom3_group = molecules.atoms[angle.a3]  # H2 atoms
 
-            d21 = atom2.p - atom1.p
-            d23 = atom2.p - atom3.p
+        d21 = atom2_group.p - atom1_group.p  # O - H1, shape: (3, no_mol)
+        d23 = atom2_group.p - atom3_group.p  # O - H2, shape: (3, no_mol)
 
-            # phi = d21 dot d23 / |d21| |d23|
-            norm_d21 = mag(d21)
-            norm_d23 = mag(d23)
-            phi = np.arccos(dot(d21, d23) / (norm_d21 * norm_d23))
+        # phi = d21 dot d23 / |d21| |d23|
+        norm_d21 = np.sqrt(np.sum(d21 * d21, axis=0))  # shape: (no_mol,)
+        norm_d23 = np.sqrt(np.sum(d23 * d23, axis=0))  # shape: (no_mol,)
+        dot_product = np.sum(d21 * d23, axis=0)  # shape: (no_mol,)
+        phi = np.arccos(dot_product / (norm_d21 * norm_d23))  # shape: (no_mol,)
 
-            # d21 cross (d21 cross d23)
-            c21_23 = cross(d21, d23)
-            Ta = cross(d21, c21_23)
-            Ta_mag = mag(Ta)
-            Ta = Ta / Ta_mag
+        # Cross products for all molecules
+        c21_23 = np.cross(d21.T, d23.T).T  # shape: (3, no_mol)
+        Ta = np.cross(d21.T, c21_23.T).T  # shape: (3, no_mol)
+        Ta_mag = np.sqrt(np.sum(Ta * Ta, axis=0))  # shape: (no_mol,)
+        Ta = Ta / Ta_mag[np.newaxis, :]  # normalize
 
-            # d23 cross (d23 cross d21) = - d23 cross (d21 cross d23) = c21_23 cross d23
-            Tc = cross(c21_23, d23)
-            Tc_mag = mag(Tc)
-            Tc = Tc / Tc_mag
+        Tc = np.cross(c21_23.T, d23.T).T  # shape: (3, no_mol)
+        Tc_mag = np.sqrt(np.sum(Tc * Tc, axis=0))  # shape: (no_mol,)
+        Tc = Tc / Tc_mag[np.newaxis, :]  # normalize
 
-            f1 = Ta * (angle.K * (phi - angle.Phi0) / norm_d21)
-            f3 = Tc * (angle.K * (phi - angle.Phi0) / norm_d23)
+        # Force calculations
+        force_factor1 = angle.K * (phi - angle.Phi0) / norm_d21  # shape: (no_mol,)
+        force_factor3 = angle.K * (phi - angle.Phi0) / norm_d23  # shape: (no_mol,)
+        
+        f1 = Ta * force_factor1[np.newaxis, :]  # shape: (3, no_mol)
+        f3 = Tc * force_factor3[np.newaxis, :]  # shape: (3, no_mol)
 
-            atom1.f += f1
-            atom2.f -= (f1 + f3)
-            atom3.f += f3
+        # Apply forces
+        atom1_group.f += f1
+        atom2_group.f -= (f1 + f3)
+        atom3_group.f += f3
 
-            accumulated_forces_angle += mag(f1) + mag(f3)
+        # Update checksum
+        accumulated_forces_angle += np.sum(np.sqrt(np.sum(f1 * f1, axis=0))) + np.sum(np.sqrt(np.sum(f3 * f3, axis=0)))
 
 # Iterates over atoms in different molecules and calculate non-bonded forces
 def UpdateNonBondedForces(sysobj: System):
@@ -250,17 +278,26 @@ def UpdateNonBondedForces(sysobj: System):
     """
     global accumulated_forces_non_bond
     acc = 0.0
-    for i in range(len(sysobj.molecules)):
-        for j in sysobj.molecules[i].neighbours:  # iterate over all neighbours of molecule i
-            for atom1 in sysobj.molecules[i].atoms:
-                for atom2 in sysobj.molecules[j].atoms:  # iterate over all pairs of atoms, similar as well as dissimilar
-                    ep = np.sqrt(atom1.ep * atom2.ep)  # ep = sqrt(ep1*ep2)
-                    sigma2 = (0.5 * (atom1.sigma + atom2.sigma)) ** 2  # sigma = (sigma1+sigma2)/2
+    molecules = sysobj.molecules
+    
+    for i in range(molecules.no_mol):
+        # Get valid neighbors for molecule i (neighbors are stored with -1 for invalid entries)
+        neighbor_indices = molecules.neighbours[i]
+        valid_neighbors = neighbor_indices[neighbor_indices != -1]
+        
+        for j in valid_neighbors:  # iterate over all neighbours of molecule i
+            for atom1_idx in range(len(molecules.atoms)):  # atom types in molecule i
+                for atom2_idx in range(len(molecules.atoms)):  # atom types in molecule j
+                    atom1_group = molecules.atoms[atom1_idx]
+                    atom2_group = molecules.atoms[atom2_idx]
+                    
+                    ep = np.sqrt(atom1_group.ep * atom2_group.ep)  # ep = sqrt(ep1*ep2)
+                    sigma2 = (0.5 * (atom1_group.sigma + atom2_group.sigma)) ** 2  # sigma = (sigma1+sigma2)/2
                     KC = 80 * 0.7  # Coulomb prefactor
-                    q = KC * atom1.charge * atom2.charge
+                    q = KC * atom1_group.charge * atom2_group.charge
 
-                    dp = atom1.p - atom2.p
-                    r2 = mag2(dp)
+                    dp = atom1_group.p[:, i] - atom2_group.p[:, j]  # shape: (3,)
+                    r2 = np.dot(dp, dp)  # scalar
                     r = np.sqrt(r2)
 
                     sir = sigma2 / r2  # crossection**2 times inverse squared distance
@@ -268,21 +305,27 @@ def UpdateNonBondedForces(sysobj: System):
                     # LJ + Coulomb forces
                     f = (ep * (12 * sir3 * sir3 - 6 * sir3) * sir + q / (r * r2)) * dp
 
-                    atom1.f += f
-                    # update both pairs, since the force is equal and opposite and pairs only exist in one neigbor list
-                    atom2.f -= f
-                    acc += mag(f)
+                    atom1_group.f[:, i] += f
+                    # update both pairs, since the force is equal and opposite and pairs only exist in one neighbor list
+                    atom2_group.f[:, j] -= f
+                    acc += np.sqrt(np.dot(f, f))
 
     accumulated_forces_non_bond += acc
 
 
 # integrating the system for one time step using Leapfrog symplectic integration
 def UpdateKDK(sysobj: System, sc: Sim_Configuration):
-    for molecule in sysobj.molecules:
-        for atom in molecule.atoms:
-            atom.v += (sc.dt / atom.mass) * atom.f  # Update the velocities
-            atom.f = Vec3()                         # set the forces zero to prepare for next potential calculation
-            atom.p += sc.dt * atom.v                # update position
+    molecules = sysobj.molecules
+    
+    for atom_group in molecules.atoms:
+        # Update velocities: v += (dt/mass) * f
+        atom_group.v += (sc.dt / atom_group.mass) * atom_group.f
+        
+        # Clear forces for next step
+        atom_group.f.fill(0.0)
+        
+        # Update positions: p += dt * v
+        atom_group.p += sc.dt * atom_group.v
 
     sysobj.time += sc.dt  # update time
 
@@ -310,7 +353,15 @@ def MakeWater(N_molecules: int) -> System:
         Angle(K=1000, Phi0=angle, a1=1, a2=0, a3=2),
     ]
 
-    sysobj = System()
+    # Create SoA structure for all water molecules
+    # Create Atoms objects for O, H1, H2 atoms across all molecules
+    Oatoms = Atoms(mass=16, ep=0.65, sigma=0.31, charge=-0.82, name="O", no_atoms=N_molecules)
+    H1atoms = Atoms(mass=1, ep=0.18828, sigma=0.238, charge=0.41, name="H", no_atoms=N_molecules)
+    H2atoms = Atoms(mass=1, ep=0.18828, sigma=0.238, charge=0.41, name="H", no_atoms=N_molecules)
+
+    atoms = [Oatoms, H1atoms, H2atoms]
+    molecules = Molecules(atoms, waterbonds, waterangle, N_molecules)
+
     # initialize all water molecules on a sphere.
     phi = np.arccos(-1) * (np.sqrt(5.0) - 1.0)
     radius = np.sqrt(N_molecules) * 0.15
@@ -323,28 +374,28 @@ def MakeWater(N_molecules: int) -> System:
         x = np.cos(theta) * r
         z = np.sin(theta) * r
 
-        #          mass  ep   sigma  charge name
-        Oatom = Atom(16, 0.65, 0.31, -0.82, "O")       # Oxygen atom
-        Hatom1 = Atom(1, 0.18828, 0.238, 0.41, "H")    # Hydrogen atom
-        Hatom2 = Atom(1, 0.18828, 0.238, 0.41, "H")    # Hydrogen atom
-
         P0 = Vec3(x * radius, y * radius, z * radius)
-        Oatom.p = Vec3(P0[0], P0[1], P0[2])
-        Hatom1.p = Vec3(P0[0] + L0 * np.sin(angle / 2), P0[1] + L0 * np.cos(angle / 2), P0[2])
-        Hatom2.p = Vec3(P0[0] - L0 * np.sin(angle / 2), P0[1] + L0 * np.cos(angle / 2), P0[2])
-        atoms = [Oatom, Hatom1, Hatom2]
-        sysobj.molecules.append(Molecule(atoms, waterbonds, waterangle))
+        
+        # Set positions in SoA structure
+        Oatoms.p[:, i] = [P0[0], P0[1], P0[2]]
+        H1atoms.p[:, i] = [P0[0] + L0 * np.sin(angle / 2), P0[1] + L0 * np.cos(angle / 2), P0[2]]
+        H2atoms.p[:, i] = [P0[0] - L0 * np.sin(angle / 2), P0[1] + L0 * np.cos(angle / 2), P0[2]]
+
+    sysobj = System()
+    sysobj.molecules = molecules
 
     return sysobj
 
 # Write the system configurations in the trajectory file.
 def WriteOutput(sysobj: System, file):
     # Loop over all atoms in model one molecule at a time and write out position
-    for molecule in sysobj.molecules:
-        for atom in molecule.atoms:
+    molecules = sysobj.molecules
+    
+    for mol_idx in range(molecules.no_mol):
+        for atom_group in molecules.atoms:
             # Match C++ iostream default formatting (~6 significant digits, general format)
             file.write(
-                f"{sysobj.time:.6g} {atom.name} {atom.p[0]:.6g} {atom.p[1]:.6g} {atom.p[2]:.6g}\n"
+                f"{sysobj.time:.6g} {atom_group.name} {atom_group.p[0, mol_idx]:.6g} {atom_group.p[1, mol_idx]:.6g} {atom_group.p[2, mol_idx]:.6g}\n"
             )
 
 #======================================================================================================

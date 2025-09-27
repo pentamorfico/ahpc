@@ -1,0 +1,30 @@
+Sat Sep 27 21:12:14 2025    results/profiles/sequential_profile_fixed.prof
+
+         324060 function calls (321696 primitive calls) in 0.616 seconds
+
+   Ordered by: cumulative time
+   List reduced from 784 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     98/1    0.000    0.000    0.616    0.616 {built-in method builtins.exec}
+        1    0.000    0.000    0.616    0.616 src/01_sequential/Water_sequential.py:1(<module>)
+       20    0.312    0.016    0.445    0.022 src/01_sequential/Water_sequential.py:214(UpdateNonBondedForces)
+   101180    0.112    0.000    0.112    0.000 src/01_sequential/Water_sequential.py:30(mag)
+    114/1    0.000    0.000    0.070    0.070 <frozen importlib._bootstrap>:1022(_find_and_load)
+    114/1    0.000    0.000    0.070    0.070 <frozen importlib._bootstrap>:987(_find_and_load_unlocked)
+    108/1    0.000    0.000    0.070    0.070 <frozen importlib._bootstrap>:664(_load_unlocked)
+     97/1    0.000    0.000    0.070    0.070 <frozen importlib._bootstrap_external>:877(exec_module)
+    164/1    0.000    0.000    0.070    0.070 <frozen importlib._bootstrap>:233(_call_with_frames_removed)
+        1    0.000    0.000    0.070    0.070 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/__init__.py:1(<module>)
+    356/4    0.000    0.000    0.066    0.017 {built-in method builtins.__import__}
+   205/31    0.000    0.000    0.065    0.002 <frozen importlib._bootstrap>:1053(_handle_fromlist)
+    91180    0.054    0.000    0.054    0.000 src/01_sequential/Water_sequential.py:33(mag2)
+       20    0.015    0.001    0.039    0.002 src/01_sequential/Water_sequential.py:170(UpdateAngleForces)
+        1    0.000    0.000    0.038    0.038 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/lib/__init__.py:1(<module>)
+        1    0.000    0.000    0.028    0.028 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/__config__.py:1(<module>)
+        1    0.000    0.000    0.028    0.028 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/_core/__init__.py:1(<module>)
+        1    0.000    0.000    0.022    0.022 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/lib/_index_tricks_impl.py:1(<module>)
+        1    0.012    0.012    0.022    0.022 src/01_sequential/Water_sequential.py:128(BuildNeighborList)
+        1    0.000    0.000    0.020    0.020 /home/klaupaucius/ahpc/.venv/lib/python3.10/site-packages/numpy/matrixlib/__init__.py:1(<module>)
+
+

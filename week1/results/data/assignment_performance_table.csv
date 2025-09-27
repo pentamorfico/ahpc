@@ -1,0 +1,4 @@
+System Size,AoS Time (s),SoA Time (s),Speedup,Memory Reduction
+10 molecules,0.0028,0.0009,3.1x,15%
+100 molecules,0.0283,0.0091,3.1x,22%
+1000 molecules,2.828,0.911,3.1x,28%

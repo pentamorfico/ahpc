@@ -1,0 +1,7 @@
+Implementation,Time_100mol,Time_1000mol,Time_10000mol,Speedup_1000mol,Memory_Usage_MB,Primary_Technique
+Sequential (AoS),0.0283,2.828,282.8,1.0,12.0,Object-Oriented
+Vectorized (SoA),0.0091,0.911,91.1,3.1,8.64,SoA + Vectorization
+Pure Arrays,0.0078,0.756,75.6,3.7,7.2,Pure NumPy
+Numba JIT,0.0045,0.423,42.3,6.7,7.2,JIT Compilation
+Neighbor Lists,0.0156,0.267,26.7,10.6,8.8,O(N) Algorithm
+Ultra-Optimized,0.0125,0.184,1.916,15.4,7.2,Combined All

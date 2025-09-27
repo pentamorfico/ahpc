@@ -1,0 +1,4 @@
+System Size,Distance Pairs,Bond Count,Distance/Bond Ratio
+10 molecules,435,20,21.8:1
+100 molecules,14850,200,74.3:1
+1000 molecules,4497000,2000,"2,248:1"
