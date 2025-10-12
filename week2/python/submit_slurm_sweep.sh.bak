@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Submit a sweep of SLURM jobs for different MPI process counts.
+# Creates job files from week2/python/job.sh by replacing the --ntasks value.
+
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")" && pwd)
+TEMPLATE="$ROOT/job.sh"
+OUTDIR="$ROOT/.."/results
+mkdir -p "$OUTDIR"
+
+# process counts to test (total MPI ranks)
+NTASKS=(2 4 8 16 32 64)
+JOBIDS=()
+JOBMAP_FILE="$OUTDIR/slurm_jobs_map.txt"
+: > "$JOBMAP_FILE"
+
+echo "Checking template exists: $TEMPLATE"
+if [ ! -f "$TEMPLATE" ]; then
+    echo "Template $TEMPLATE not found" >&2
+    exit 1
+fi
+
+# create a working copy and submit
+for nt in "${NTASKS[@]}"; do
+    jobfile="$ROOT/job_ntasks_${nt}.sh"
+    # replace the SBATCH --ntasks line
+    awk -v nt="$nt" '{ if ($0 ~ /^#SBATCH --ntasks=/) { print "#SBATCH --ntasks=" nt } else print $0 }' "$TEMPLATE" > "$jobfile"
+    chmod +x "$jobfile"
+    echo "Submitting job for ntasks=$nt -> $jobfile"
+    sbatch_out=$(sbatch "$jobfile") || { echo "sbatch failed for $jobfile"; cat "$jobfile"; exit 1; }
+    echo "$sbatch_out"
+    # extract job id
+    jid=$(echo "$sbatch_out" | awk '{print $NF}')
+    echo "$nt,$jid" >> "$JOBMAP_FILE"
+    JOBIDS+=($jid)
+    sleep 1
+done
+
+echo "Submitted jobs. Map written to $JOBMAP_FILE"
+
+# Polling for job completion
+echo "Polling for job completion..."
+# Wait until none of these job IDs are in squeue
+sleep 5
+COUNT=0
+MAXPOLL=1800  # max seconds to wait
+INTERVAL=15
+elapsed=0
+while [ $elapsed -lt $MAXPOLL ]; do
+    running=0
+    for jid in "${JOBIDS[@]}"; do
+        if squeue -j "$jid" -h | grep -q .; then
+            running=$((running+1))
+        fi
+    done
+    if [ $running -eq 0 ]; then
+        echo "All jobs finished after ${elapsed}s"
+        break
+    fi
+    echo "Jobs still running: $running (elapsed ${elapsed}s). Waiting ${INTERVAL}s..."
+    sleep $INTERVAL
+    elapsed=$((elapsed+INTERVAL))
+done
+
+if [ $elapsed -ge $MAXPOLL ]; then
+    echo "Timeout waiting for jobs to finish (waited ${MAXPOLL}s)" >&2
+fi
+
+# Collect slurm output files
+while IFS=, read -r nt jid; do
+    outname="$OUTDIR/slurm_job_${nt}_${jid}.out"
+    # slurm writes slurm-<jid>.out or jobfile may specify output. Try to find it
+    if [ -f "slurm-${jid}.out" ]; then
+        mv -f "slurm-${jid}.out" "$outname"
+        echo "Saved slurm-${jid}.out -> $outname"
+    else
+        # try sacct to get stdout if available
+        echo "No slurm-${jid}.out found; leaving note in $outname"
+        echo "No slurm-${jid}.out found. Check job status and path on compute node." > "$outname"
+    fi
+done < "$JOBMAP_FILE"
+
+echo "Done. Collected outputs in $OUTDIR"

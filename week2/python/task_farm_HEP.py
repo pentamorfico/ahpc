@@ -1,18 +1,21 @@
-"""
- Applied High Performance Computing
- 
- Task Farming with MPI
- 
- Assignment: Make an MPI task farm for analysing HEP data. To "execute" a
- task, the worker computes the accuracy of a specific set of cuts.
- The resulting accuracy should be send back from the worker to the master.
+"""Applied High Performance Computing
 
- Author: Troels Haugbølle, Niels Bohr Institute, University of Copenhagen
- Date:   February 2022
- License: CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)
+Task Farming with MPI
+
+Assignment: Make an MPI task farm for analysing HEP data. To "execute" a
+task, the worker computes the accuracy of a specific set of cuts.
+The resulting accuracy should be send back from the worker to the master.
+
+Author: Troels Haugbølle, Niels Bohr Institute, University of Copenhagen
+Date:   February 2022
+License: CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)
+
+This file has a small CLI addition: --data to point to the CSV file and
+--repeat to artificially increase the per-task work (useful for timing).
 """
 import numpy as np
 import time
+import argparse
 
 # To run an MPI program we always need to include the MPI headers
 from mpi4py import MPI
@@ -22,8 +25,11 @@ from mpi4py import MPI
 # BEWARE! Generates n_cuts^8 permutations to analyse.
 # If you run many workers, you may want to increase from 3.
 n_cuts = 2
-n_settings = n_cuts**8
-NO_MORE_TASKS = n_settings + 1
+n_settings = None
+NO_MORE_TASKS = None
+
+# Default repeat factor to increase per-task work (no. of times accuracy is computed)
+DEFAULT_REPEAT = 1
 
 # Class to hold the main data set together with a bit of statistics
 class Data:
@@ -73,14 +79,16 @@ class Data:
             self.means_bckg[i] *= self.flip[i]
 
 # call this function to complete the task. It calculates the accuracy of a given set of settings
-def task_function(setting, ds):
-    # pred evalautes to true if cuts for events are satisfied for all cuts
-    pred = np.all(ds.data < setting, axis=1)
+def task_function(setting, ds, repeat=1):
+    # pred evaluates to true if cuts for events are satisfied for all cuts
+    # repeat the computation `repeat` times to increase CPU work for timing
+    acc = 0.0
+    for _ in range(repeat):
+        pred = np.all(ds.data < setting, axis=1)
+        acc = np.sum(pred == ds.signal) / ds.nevents
+    return acc
 
-    # accuracy is percentage of events that are predicted as true signal if and only if a true signal
-    return np.sum(pred == ds.signal) / ds.nevents
-
-def master(nworker, ds, comm):
+def master(nworker, ds, comm, repeat=1):
     ranges = np.zeros((n_cuts, 8))  # ranges for cuts to explore
 
     # loop over different event channels and set up cuts
@@ -103,17 +111,29 @@ def master(nworker, ds, comm):
     tstart = time.time()  # start time
 
     # ================================================================
-    """
-    IMPLEMENT HERE THE CODE FOR THE MASTER
-    The master should pass a set of settings to a worker, and the worker should return the accuracy
-    """
+    # dynamic task-farm master
+    next_task = 0
+    completed = 0
+    status = MPI.Status()
 
-    # THIS CODE SHOULD BE REPLACED BY TASK FARM
-    # loop over all possible cuts and evaluate accuracy
-    for k in range(n_settings):
-        accuracy[k] = task_function(settings[k], ds)
-    # THIS CODE SHOULD BE REPLACED BY TASK FARM
-    # ================================================================
+    for worker_rank in range(1, nworker + 1):
+        if next_task < n_settings:
+            comm.send({'idx': next_task, 'setting': settings[next_task]}, dest=worker_rank)
+            next_task += 1
+        else:
+            comm.send(None, dest=worker_rank)
+
+    while completed < n_settings:
+        msg = comm.recv(source=MPI.ANY_SOURCE, status=status)
+        src = status.Get_source()
+        if isinstance(msg, dict) and 'idx' in msg and 'accuracy' in msg:
+            accuracy[msg['idx']] = msg['accuracy']
+            completed += 1
+            if next_task < n_settings:
+                comm.send({'idx': next_task, 'setting': settings[next_task]}, dest=src)
+                next_task += 1
+            else:
+                comm.send(None, dest=src)
 
     tend = time.time()  # end time
     # diagnostics
@@ -132,25 +152,53 @@ def master(nworker, ds, comm):
     
     print()
     print(f"Number of settings:{n_settings:>9d}")
-    print(f"Elapsed time      :{tend - tstart:>9.4f}")
-    print(f"task time [mus]   :{(tend - tstart) * 1e6 / n_settings:>9.4f}")
+    elapsed = tend - tstart
+    print(f"Elapsed time      :{elapsed:>9.4f} s")
+    print(f"task time [mus]   :{elapsed * 1e6 / n_settings:>9.4f}")
+    print(f"repeat factor     :{repeat}")
 
-def worker(rank, ds, comm):
+def worker(rank, ds, comm, repeat=1):
     """
     IMPLEMENT HERE THE CODE FOR THE WORKER
     Use a call to "task_function" to complete a task and return accuracy to master.
     """
-    pass
+    status = MPI.Status()
+    while True:
+        msg = comm.recv(source=0, status=status)
+        if msg is None:
+            break
+        idx = msg.get('idx')
+        setting = msg.get('setting')
+        acc = task_function(setting, ds, repeat=repeat)
+        comm.send({'idx': idx, 'accuracy': float(acc)}, dest=0)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data', default="../mc_ggH_16_13TeV_Zee_EGAM1_calocells_16249871.csv",
+                        help='CSV data file to load')
+    parser.add_argument('--n_cuts', type=int, default=None,
+                        help='number of cut values per channel (overrides module default)')
+    parser.add_argument('--repeat', type=int, default=DEFAULT_REPEAT,
+                        help='repeat factor to increase per-task work (int)')
+    args = parser.parse_args()
+
+    # allow overriding n_cuts from the command line
+    if args.n_cuts is not None:
+        # assign module-level n_cuts from CLI (no 'global' needed at module scope)
+        n_cuts = int(args.n_cuts)
+
+    # set settings counts based on n_cuts
+    n_settings = n_cuts ** 8
+    NO_MORE_TASKS = n_settings + 1
+
     comm = MPI.COMM_WORLD
     nrank = comm.Get_size()  # get the total number of ranks
     rank = comm.Get_rank()   # get the rank of this process
 
     # All ranks need to read the data
-    ds = Data(filename = "../mc_ggH_16_13TeV_Zee_EGAM1_calocells_16249871.csv")
+    ds = Data(filename=args.data)
 
     if rank == 0:        # rank 0 is the master
-        master(nrank-1, ds, comm)  # there is nrank-1 worker processes
+        master(nrank-1, ds, comm, repeat=args.repeat)  # there is nrank-1 worker processes
     else:                # ranks in [1:nrank] are workers
-        worker(rank, ds, comm)
+        worker(rank, ds, comm, repeat=args.repeat)

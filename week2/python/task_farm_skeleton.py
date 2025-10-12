@@ -31,13 +31,29 @@ def master(nworker, comm):
 
     tstart = time.perf_counter()
 
-    """
-    IMPLEMENT HERE THE CODE FOR THE MASTER
-    ARRAY task contains tasks to be done. Send one element at a time to workers
-    ARRAY result should at completion contain the ranks of the workers that did
-    the corresponding tasks
-    """
+    # master: send tasks dynamically and collect which worker handled each task
+    next_task = 0
+    completed = 0
+    status = MPI.Status()
 
+    for worker in range(1, nworker + 1):
+        if next_task < NTASKS:
+            comm.send({'idx': next_task, 'task': int(task[next_task])}, dest=worker)
+            next_task += 1
+        else:
+            comm.send(None, dest=worker)
+
+    while completed < NTASKS:
+        msg = comm.recv(source=MPI.ANY_SOURCE, status=status)
+        src = status.Get_source()
+        if isinstance(msg, dict) and 'idx' in msg and 'rank' in msg:
+            result[msg['idx']] = msg['rank']
+            completed += 1
+            if next_task < NTASKS:
+                comm.send({'idx': next_task, 'task': int(task[next_task])}, dest=src)
+                next_task += 1
+            else:
+                comm.send(None, dest=src)
 
     tend = time.perf_counter()
 
@@ -72,7 +88,15 @@ def worker(rank, comm):
     IMPLEMENT HERE THE CODE FOR THE WORKER
     Use a call to "task_function" to complete a task
     """
-    pass
+    status = MPI.Status()
+    while True:
+        data = comm.recv(source=0, status=status)
+        if data is None:
+            break
+        idx = data.get('idx')
+        taskval = data.get('task')
+        task_function(taskval)
+        comm.send({'idx': idx, 'rank': rank}, dest=0)
 
 if __name__ == "__main__":
     comm = MPI.COMM_WORLD

@@ -1,0 +1,41 @@
+% Minimal pandoc LaTeX template without \usepackage{lmodern}
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{calc}
+\usepackage{xfp}
+\usepackage{etoolbox}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=1in}
+% helper for pandoc's tightlist
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\begin{document}
+\begin{center}
+\LARGE $title$
+\end{center}
+\vspace{1em}
+$for(author)$
+	extbf{$author$}\\
+$endfor$
+\vspace{1em}
+$body$
+\end{document}
+\documentclass[$if(fontsize)$$fontsize$,$endif$$if(lang)$$lang$,$endif$]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=1in}
+$if(title)$\title{$title$}$endif$
+$if(author)$\author{$for(author)$$author$$sep$ \\ $endfor$}$endif$
+$if(date)$\date{$date$}$endif$
+\begin{document}
+$if(title)$\maketitle$endif$
+$for(header-includes)$$header-includes$$endfor$
+$body$
+\end{document}

@@ -1,0 +1,4 @@
+ntasks,RunTime_s,file
+2,0,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt2-633.out
+4,0,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt4-634.out
+8,0,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt8-635.out

@@ -31,13 +31,38 @@ def master(nworker, comm):
 
     tstart = time.perf_counter()
 
-    """
-    IMPLEMENT HERE THE CODE FOR THE MASTER
-    ARRAY task contains tasks to be done. Send one element at a time to workers
-    ARRAY result should at completion contain the ranks of the workers that did
-    the corresponding tasks
-    """
+    # simple master-worker implementation using send/recv (python object mode)
+    # protocol: master sends dict {'idx': idx, 'task': taskval} to workers
+    # when no more tasks remain master sends None as termination signal
+    next_task = 0
+    completed = 0
+    status = MPI.Status()
 
+    # initially send one task to each worker (if available)
+    for worker in range(1, nworker + 1):
+        if next_task < NTASKS:
+            comm.send({'idx': next_task, 'task': int(task[next_task])}, dest=worker)
+            next_task += 1
+        else:
+            # tell idle workers there's no work
+            comm.send(None, dest=worker)
+
+    # receive results and send new tasks until all are completed
+    while completed < NTASKS:
+        msg = comm.recv(source=MPI.ANY_SOURCE, status=status)
+        src = status.Get_source()
+        # expected msg: {'idx': idx, 'rank': rank}
+        if isinstance(msg, dict) and 'idx' in msg and 'rank' in msg:
+            result[msg['idx']] = msg['rank']
+            completed += 1
+
+            # hand out a new task if available
+            if next_task < NTASKS:
+                comm.send({'idx': next_task, 'task': int(task[next_task])}, dest=src)
+                next_task += 1
+            else:
+                # no more tasks -> send termination
+                comm.send(None, dest=src)
 
     tend = time.perf_counter()
 
@@ -72,7 +97,19 @@ def worker(rank, comm):
     IMPLEMENT HERE THE CODE FOR THE WORKER
     Use a call to "task_function" to complete a task
     """
-    pass
+    status = MPI.Status()
+    while True:
+        data = comm.recv(source=0, status=status)
+        # termination signal
+        if data is None:
+            break
+        # data is expected to be {'idx': idx, 'task': taskval}
+        idx = data.get('idx')
+        taskval = data.get('task')
+        # complete the task
+        task_function(taskval)
+        # send back the index and worker rank
+        comm.send({'idx': idx, 'rank': rank}, dest=0)
 
 if __name__ == "__main__":
     comm = MPI.COMM_WORLD

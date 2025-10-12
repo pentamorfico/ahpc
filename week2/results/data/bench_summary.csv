@@ -1,0 +1,9 @@
+jobid,ntasks,runtime_s,n_settings,status,out_path,err_path
+675,128,3.646700,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt128-675.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt128-675.err
+672,16,23.966300,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt16-672.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt16-672.err
+669,2,355.489400,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt2-669.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt2-669.err
+676,256,2.996800,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt256-676.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt256-676.err
+673,32,12.111300,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt32-673.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt32-673.err
+670,4,117.597000,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt4-670.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt4-670.err
+674,64,6.111600,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt64-674.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt64-674.err
+671,8,51.468700,6561,OK,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt8-671.out,/home/bxl776_ku_dk/modi_mount/ahpc/week2/results/slurm-apptainer-nt8-671.err
