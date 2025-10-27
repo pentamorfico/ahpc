@@ -1,0 +1,106 @@
+=== Comprehensive SLURM Weak Scaling Experiment ===
+Job ID: 13750
+Node: n003  
+Date: Mon Oct 27 17:46:49 CET 2025
+Testing strategies: 1(Multiple), 2(Fewer), 3(Tasks), 4(SIMD), 5(Scheduling), 6(Sections)
+
+Strategy,Strategy_Name,Threads,NFREQ,Runtime,Checksum,Efficiency
+=== Testing Strategy 1: Multiple_Regions ===
+  Building and testing 1 threads with NFREQ=65536
+1,Multiple_Regions,1,65536,1.182,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+1,Multiple_Regions,2,131072,1.326,23.2912756004623,0.891
+  Building and testing 4 threads with NFREQ=262144
+1,Multiple_Regions,4,262144,1.621,23.2912758884722,0.729
+  Building and testing 8 threads with NFREQ=524288
+1,Multiple_Regions,8,524288,2.223,23.2912758885992,0.532
+  Building and testing 16 threads with NFREQ=1048576
+1,Multiple_Regions,16,1048576,3.479,23.2912759618112,0.340
+  Building and testing 32 threads with NFREQ=2097152
+1,Multiple_Regions,32,2097152,6.133,23.2912759983829,0.193
+  Building and testing 64 threads with NFREQ=4194304
+1,Multiple_Regions,64,4194304,11.65,23.2912760166627,0.101
+
+=== Testing Strategy 2: Fewer_Regions ===
+  Building and testing 1 threads with NFREQ=65536
+2,Fewer_Regions,1,65536,1.183,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+2,Fewer_Regions,2,131072,1.326,23.2912756004623,0.892
+  Building and testing 4 threads with NFREQ=262144
+2,Fewer_Regions,4,262144,1.623,23.2912758884722,0.729
+  Building and testing 8 threads with NFREQ=524288
+2,Fewer_Regions,8,524288,2.227,23.2912758885992,0.531
+  Building and testing 16 threads with NFREQ=1048576
+2,Fewer_Regions,16,1048576,3.48,23.2912759618112,0.340
+  Building and testing 32 threads with NFREQ=2097152
+2,Fewer_Regions,32,2097152,6.127,23.2912759983829,0.193
+  Building and testing 64 threads with NFREQ=4194304
+2,Fewer_Regions,64,4194304,11.69,23.2912760166627,0.101
+
+=== Testing Strategy 3: Task_Based ===
+  Building and testing 1 threads with NFREQ=65536
+3,Task_Based,1,65536,1.186,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+3,Task_Based,2,131072,1.328,23.2912756004623,0.893
+  Building and testing 4 threads with NFREQ=262144
+3,Task_Based,4,262144,1.62,23.2912758884722,0.732
+  Building and testing 8 threads with NFREQ=524288
+3,Task_Based,8,524288,2.235,23.2912758885992,0.531
+  Building and testing 16 threads with NFREQ=1048576
+3,Task_Based,16,1048576,3.512,23.2912759618112,0.338
+  Building and testing 32 threads with NFREQ=2097152
+3,Task_Based,32,2097152,6.15,23.2912759983829,0.193
+  Building and testing 64 threads with NFREQ=4194304
+3,Task_Based,64,4194304,11.66,23.2912760166627,0.102
+
+=== Testing Strategy 4: SIMD_Optimized ===
+  Building and testing 1 threads with NFREQ=65536
+4,SIMD_Optimized,1,65536,1.182,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+4,SIMD_Optimized,2,131072,1.327,23.2912756004623,0.891
+  Building and testing 4 threads with NFREQ=262144
+4,SIMD_Optimized,4,262144,1.62,23.2912758884722,0.730
+  Building and testing 8 threads with NFREQ=524288
+4,SIMD_Optimized,8,524288,2.224,23.2912758885992,0.531
+  Building and testing 16 threads with NFREQ=1048576
+4,SIMD_Optimized,16,1048576,3.473,23.2912759618112,0.340
+  Building and testing 32 threads with NFREQ=2097152
+4,SIMD_Optimized,32,2097152,6.167,23.2912759983829,0.192
+  Building and testing 64 threads with NFREQ=4194304
+4,SIMD_Optimized,64,4194304,11.64,23.2912760166627,0.102
+
+=== Testing Strategy 5: Advanced_Scheduling ===
+  Building and testing 1 threads with NFREQ=65536
+5,Advanced_Scheduling,1,65536,1.183,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+5,Advanced_Scheduling,2,131072,1.329,23.2912756004623,0.890
+  Building and testing 4 threads with NFREQ=262144
+5,Advanced_Scheduling,4,262144,1.626,23.2912758884722,0.728
+  Building and testing 8 threads with NFREQ=524288
+5,Advanced_Scheduling,8,524288,2.235,23.2912758885992,0.529
+  Building and testing 16 threads with NFREQ=1048576
+5,Advanced_Scheduling,16,1048576,3.497,23.2912759618112,0.338
+  Building and testing 32 threads with NFREQ=2097152
+5,Advanced_Scheduling,32,2097152,6.117,23.2912759983829,0.193
+  Building and testing 64 threads with NFREQ=4194304
+5,Advanced_Scheduling,64,4194304,11.65,23.2912760166627,0.102
+
+=== Testing Strategy 6: Sections_Based ===
+  Building and testing 1 threads with NFREQ=65536
+6,Sections_Based,1,65536,1.185,23.2912755963296,1.00
+  Building and testing 2 threads with NFREQ=131072
+6,Sections_Based,2,131072,1.33,23.2912756004623,0.891
+  Building and testing 4 threads with NFREQ=262144
+6,Sections_Based,4,262144,1.63,23.2912758884722,0.727
+  Building and testing 8 threads with NFREQ=524288
+6,Sections_Based,8,524288,2.241,23.2912758885992,0.529
+  Building and testing 16 threads with NFREQ=1048576
+6,Sections_Based,16,1048576,3.524,23.2912759618112,0.336
+  Building and testing 32 threads with NFREQ=2097152
+6,Sections_Based,32,2097152,6.266,23.2912759983829,0.189
+  Building and testing 64 threads with NFREQ=4194304
+6,Sections_Based,64,4194304,11.78,23.2912760166627,0.101
+
+=== Comprehensive Weak Scaling Test Complete ===
+Ideal weak scaling efficiency = 1.0 (constant runtime)
+Job completed on Mon Oct 27 17:50:42 CET 2025

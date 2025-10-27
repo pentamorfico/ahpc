@@ -1,0 +1,78 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Configure graphics to automatically adjust to page width
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+% Scale images if necessary, so that they will not overflow the page
+% margins by default, and it is still possible to overwrite the defaults
+% using explicit options in \includegraphics[width, height, ...]{}
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{calc}
+\usepackage{ltxtable}
+\usepackage{fancyvrb}
+\usepackage{framed}
+\usepackage{color}
+\usepackage{listings}
+\usepackage{newunicodechar}
+
+% Handle Unicode subscripts
+\newunicodechar{₁}{\textsubscript{1}}
+\newunicodechar{₂}{\textsubscript{2}}
+\newunicodechar{₃}{\textsubscript{3}}
+\newunicodechar{₄}{\textsubscript{4}}
+\newunicodechar{₅}{\textsubscript{5}}
+\newunicodechar{₆}{\textsubscript{6}}
+\newunicodechar{₇}{\textsubscript{7}}
+\newunicodechar{₈}{\textsubscript{8}}
+\newunicodechar{₉}{\textsubscript{9}}
+\newunicodechar{₀}{\textsubscript{0}}
+
+% Handle other Unicode symbols
+\newunicodechar{≈}{\ensuremath{\approx}}
+\newunicodechar{×}{\ensuremath{\times}}
+\newunicodechar{→}{\ensuremath{\rightarrow}}
+\newunicodechar{←}{\ensuremath{\leftarrow}}
+\newunicodechar{°}{\ensuremath{^{\circ}}}
+\newunicodechar{±}{\ensuremath{\pm}}
+
+% Define Shaded environment for code blocks
+\newenvironment{Shaded}{\begin{framed}}{\end{framed}}
+
+% Define Highlighting environment for syntax highlighting
+\newenvironment{Highlighting}{\begin{verbatim}}{\end{verbatim}}
+
+% Define common highlighting commands
+\newcommand{\KeywordTok}[1]{\textbf{#1}}
+\newcommand{\StringTok}[1]{\textit{#1}}
+\newcommand{\CommentTok}[1]{\textit{#1}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{#1}
+\newcommand{\ControlFlowTok}[1]{\textbf{#1}}
+
+% Define tightlist command for pandoc
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+\title{AHPC Assignment 3: OpenMP Parallelization and Weak Scaling}
+\author{AHPC Student}
+\date{October 27, 2025}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+$body$
+
+\end{document}
