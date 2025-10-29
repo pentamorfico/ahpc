@@ -65,19 +65,19 @@ case $SM in
     
   8)
     export CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=58  #  8 SMs
-    python ./sw_parallel.py
+    python ./sw_parallel.py;;
     
   10)
     export CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=72  # 10 SMs
-    python ./sw_parallel.py
+    python ./sw_parallel.py;;
 
   12)
     export CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=86  # 12 SMs
-    python ./sw_parallel.py
+    python ./sw_parallel.py;;
 
   14)
     export CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=100 # 14 SMs
-    python ./sw_parallel.py
+    python ./sw_parallel.py;;
 
   *)
     echo "Unknown value for SM = $SM"
