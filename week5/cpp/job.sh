@@ -7,5 +7,5 @@
 ##SBATCH --exclusive
 
 mpiexec -- apptainer exec \
-   ~/modi_images/slurm-notebook-23.11.10.sif \
+   ~/modi_images/hpc-notebook-23.11.10.sif \
    ./fwc_parallel --iter 1000 --model ../models/small.hdf5
