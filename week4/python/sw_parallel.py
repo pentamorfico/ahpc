@@ -10,9 +10,22 @@ Author: Troels Haugbølle, Niels Bohr Institute, University of Copenhagen
 Date:   October 2025
 License: CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)
 """
+import cupy as cp
 import numpy as np
 import sys
 import time
+
+# Enable NVTX profiling markers
+try:
+    from cupyx.profiler import time_range
+    PROFILING_ENABLED = True
+except ImportError:
+    # Fallback if NVTX not available
+    from contextlib import contextmanager
+    @contextmanager
+    def time_range(name):
+        yield
+    PROFILING_ENABLED = False
 
 # Grid size can be set at module level
 NX = 512
@@ -22,11 +35,14 @@ NY = 512
 PREC = 8  # 4 for float32, 8 for float64
 
 if PREC == 4:
-    real_t = np.float32
+    real_t = cp.float32
+    np_real_t = np.float32
 elif PREC == 8:
-    real_t = np.float64
+    real_t = cp.float64
+    np_real_t = np.float64
 else:
-    real_t = np.float32
+    real_t = cp.float32
+    np_real_t = np.float32
 
 class Sim_Configuration:
     """ Configuration class for simulation parameters """
@@ -82,36 +98,42 @@ class Water:
     """ Representation of a water world including ghost lines, which is a "1-cell padding" of rows and columns
     around the world. These ghost lines is a technique to implement periodic boundary conditions. """
     def __init__(self):
-        self.u = np.zeros((NY, NX), dtype=real_t) # The speed in the horizontal direction.
-        self.v = np.zeros((NY, NX), dtype=real_t) # The speed in the vertical direction.
-        self.e = np.zeros((NY, NX), dtype=real_t) # The water elevation.
+        # Initialize arrays on GPU using CuPy
+        self.u = cp.zeros((NY, NX), dtype=real_t) # The speed in the horizontal direction.
+        self.v = cp.zeros((NY, NX), dtype=real_t) # The speed in the vertical direction.
+        self.e = cp.zeros((NY, NX), dtype=real_t) # The water elevation.
 
-        ii = 100.0 * (np.arange(1, NY - 1, dtype=real_t) - (NY - 2.0) / 2.0) / NY # The vertical coordinate
-        jj = 100.0 * (np.arange(1, NX - 1, dtype=real_t) - (NX - 2.0) / 2.0) / NX # The horizontal coordinate
-        II, JJ = np.meshgrid(ii, jj, indexing="ij")                               # Meshgrid for 2D coordinates to enable vectorized computation
-        self.e[1:NY - 1, 1:NX - 1] = np.exp(-0.02 * (II * II + JJ * JJ))
+        # Initialize coordinates on GPU
+        ii = 100.0 * (cp.arange(1, NY - 1, dtype=real_t) - (NY - 2.0) / 2.0) / NY # The vertical coordinate
+        jj = 100.0 * (cp.arange(1, NX - 1, dtype=real_t) - (NX - 2.0) / 2.0) / NX # The horizontal coordinate
+        II, JJ = cp.meshgrid(ii, jj, indexing="ij")                               # Meshgrid for 2D coordinates to enable vectorized computation
+        self.e[1:NY - 1, 1:NX - 1] = cp.exp(-0.02 * (II * II + JJ * JJ))
 
 def to_file(water_history, filename):
     """ Write a history of the water heights to a binary file. Arguments:
         water_history: List of water elevation grids to write
         filename: The output filename of the binary file """
-    # Convert list to numpy array and write as binary
-    history_array = np.array(water_history, dtype=real_t)
+    # Transfer GPU arrays to CPU and write as binary
+    # Convert CuPy arrays to NumPy arrays for file I/O
+    history_cpu = [cp.asnumpy(frame) for frame in water_history]
+    history_array = np.array(history_cpu, dtype=np_real_t)
     with open(filename, 'wb') as f:
         history_array.tofile(f)
 
 def exchange_horizontal_ghost_lines(data):
     """ Exchange the horizontal ghost lines i.e. copy the second data row to the very last data row and vice versa.
         data: The data update, which could be the water elevation `e` or the speed in the horizontal direction `u`. """
-    data[0, :] = data[NY - 2, :]
-    data[NY - 1, :] = data[1, :]
+    with time_range("exchange_horizontal_ghost_lines"):
+        data[0, :] = data[NY - 2, :]
+        data[NY - 1, :] = data[1, :]
 
 def exchange_vertical_ghost_lines(data):
     """Exchange the vertical ghost lines i.e. copy the second data column to the rightmost data column and vice versa.
        data: The data update, which could be the water elevation `e` or the speed in the vertical direction `v`.
     """
-    data[:, 0] = data[:, NX - 2]
-    data[:, NX - 1] = data[:, 1]
+    with time_range("exchange_vertical_ghost_lines"):
+        data[:, 0] = data[:, NX - 2]
+        data[:, NX - 1] = data[:, 1]
 
 def integrate(w, dt, dx, dy, g):
     """ One integration step
@@ -119,18 +141,22 @@ def integrate(w, dt, dx, dy, g):
         dt: Time step
         dx, dy: Grid spacing in x and y direction
         g: Gravitational acceleration """
-    exchange_horizontal_ghost_lines(w.e)
-    exchange_horizontal_ghost_lines(w.v)
-    exchange_vertical_ghost_lines(w.e)
-    exchange_vertical_ghost_lines(w.u)
-    
-    # Update velocities (vectorized)
-    w.u[0:NY-1, 0:NX-1] -= dt / dx * g * (w.e[0:NY-1, 1:NX] - w.e[0:NY-1, 0:NX-1])
-    w.v[0:NY-1, 0:NX-1] -= dt / dy * g * (w.e[1:NY, 0:NX-1] - w.e[0:NY-1, 0:NX-1])
-    
-    # Update elevations (vectorized)
-    w.e[1:NY-1, 1:NX-1] -= dt / dx * (w.u[1:NY-1, 1:NX-1] - w.u[1:NY-1, 0:NX-2]) + \
-                           dt / dy * (w.v[1:NY-1, 1:NX-1] - w.v[0:NY-2, 1:NX-1])
+    with time_range("integrate"):
+        # Exchange ghost lines (periodic boundary conditions)
+        exchange_horizontal_ghost_lines(w.e)
+        exchange_horizontal_ghost_lines(w.v)
+        exchange_vertical_ghost_lines(w.e)
+        exchange_vertical_ghost_lines(w.u)
+        
+        # Update velocities (vectorized operations on GPU)
+        with time_range("velocity_update"):
+            w.u[0:NY-1, 0:NX-1] -= dt / dx * g * (w.e[0:NY-1, 1:NX] - w.e[0:NY-1, 0:NX-1])
+            w.v[0:NY-1, 0:NX-1] -= dt / dy * g * (w.e[1:NY, 0:NX-1] - w.e[0:NY-1, 0:NX-1])
+        
+        # Update elevations (vectorized operations on GPU)
+        with time_range("elevation_update"):
+            w.e[1:NY-1, 1:NX-1] -= dt / dx * (w.u[1:NY-1, 1:NX-1] - w.u[1:NY-1, 0:NX-2]) + \
+                                   dt / dy * (w.v[1:NY-1, 1:NX-1] - w.v[0:NY-2, 1:NX-1])
 
 def simulate(config):
     """ Simulation of shallow water
@@ -139,6 +165,8 @@ def simulate(config):
     # Save initial conditions before any integration, and store history in a list
     water_history = [water_world.e.copy()]
     
+    # Synchronize GPU before timing
+    cp.cuda.Stream.null.synchronize()
     begin = time.perf_counter()
     
     for t in range(config.iter):
@@ -146,11 +174,14 @@ def simulate(config):
         if t % config.data_period == 0:
             water_history.append(water_world.e.copy())
     
+    # Synchronize GPU to ensure all computations are complete
+    cp.cuda.Stream.null.synchronize()
     end = time.perf_counter()
     
     to_file(water_history, config.filename)
     
-    checksum = np.sum(water_world.e)
+    # Transfer final result to CPU for checksum calculation
+    checksum = float(cp.sum(water_world.e))
     print(f"checksum: {checksum}")
     print(f"elapsed time: {end - begin} sec")
 
