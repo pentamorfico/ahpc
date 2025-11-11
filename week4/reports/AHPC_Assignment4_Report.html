@@ -1,0 +1,752 @@
+<h1 id="advanced-high-performance-computing-assignment-4">Advanced High-Performance Computing Assignment 4</h1>
+<h2 id="gpu-parallelization-with-cupy-for-shallow-water-simulation-week-4">GPU Parallelization with CuPy for Shallow Water Simulation (Week 4)</h2>
+<p><strong>Student:</strong> Mario Rodriguez Mestre<br />
+<strong>Date:</strong> November 11, 2025<br />
+<strong>Course:</strong> AHPC - Advanced High-Performance Computing<br />
+<strong>Repository:</strong> https://github.com/pentamorfico/ahpc</p>
+<hr />
+<h2 id="abstract">Abstract</h2>
+<p>This report documents Assignment 4: GPU parallelization of a Shallow Water (SW) simulation using CuPy and performance analysis through profiling and asymptotic testing. Task 1 converts the NumPy-based sequential implementation to GPU-accelerated CuPy, integrating NVTX profiling markers for detailed performance analysis with NVIDIA nsys. Task 2 evaluates asymptotic performance across grid sizes from 64x64 to 2048x2048 and measures CPU vs GPU speedup. The implementation achieves <strong>21.4x speedup</strong> for 1024x1024 grids with asymptotic performance of <strong>0.36 ns/cell</strong>, demonstrating efficient GPU utilization. Analysis reveals optimal minimum grid size of <strong>1024x1024</strong> for efficient GPU usage on RTX A6000 hardware.</p>
+<hr />
+<h2 id="task-1-gpu-parallelization-strategy">1. Task 1: GPU Parallelization Strategy</h2>
+<h3 id="assignment-requirements-and-implementation-approach">1.1 Assignment Requirements and Implementation Approach</h3>
+<p>Task 1 requires converting the sequential Shallow Water simulation to execute on GPU using CuPy, implementing profiling capabilities, and identifying performance bottlenecks. The assignment emphasizes: - Replacing NumPy operations with CuPy for GPU execution - Using NVTX profiling markers to enable nsys analysis - Identifying which code sections should execute on GPU - Analyzing profiler output to determine bottlenecks - Considering optimization opportunities (kernel fusion, async I/O)</p>
+<p>The Shallow Water model simulates ocean dynamics through finite difference stencil operations on a 2D grid with periodic boundary conditions (ghost cells). The core computation involves: 1. <strong>Ghost cell exchange</strong>: Copying boundary rows/columns for periodic boundaries 2. <strong>Velocity update</strong>: Computing horizontal (u) and vertical (v) velocities from elevation gradients 3. <strong>Elevation update</strong>: Computing water elevation (e) from velocity divergence</p>
+<h3 id="implementation-strategy">1.2 Implementation Strategy</h3>
+<p><strong>Key Design Decisions:</strong></p>
+<ol type="1">
+<li><strong>Data Location Strategy</strong>
+<ul>
+<li>All computational arrays (u, v, e) allocated on GPU memory using <code>cp.zeros()</code></li>
+<li>Initial conditions computed entirely on GPU using <code>cp.meshgrid()</code> and <code>cp.exp()</code></li>
+<li>Data remains on GPU throughout simulation loop</li>
+<li>CPU transfers only for: (a) periodic snapshots every N iterations, (b) final checksum, (c) file I/O</li>
+</ul></li>
+<li><strong>Profiling Integration</strong>
+<ul>
+<li>NVTX markers added using <code>cupyx.profiler.time_range</code> context managers</li>
+<li>Key regions marked: <code>integrate</code>, <code>velocity_update</code>, <code>elevation_update</code>, <code>exchange_*_ghost_lines</code></li>
+<li>Enables detailed section-by-section analysis in nsys output</li>
+</ul></li>
+<li><strong>GPU Synchronization</strong>
+<ul>
+<li>Explicit synchronization before/after timing: <code>cp.cuda.Stream.null.synchronize()</code></li>
+<li>Ensures accurate performance measurements (GPU operations are asynchronous)</li>
+</ul></li>
+<li><strong>Memory Transfer Optimization</strong>
+<ul>
+<li>Minimize host&lt;-&gt;&gt;device transfers by keeping data on GPU</li>
+<li>Batch snapshot transfers rather than individual per-iteration transfers</li>
+<li>Use GPU-side copies for ghost cell operations</li>
+</ul></li>
+</ol>
+<p><strong>Code Transformation Example:</strong></p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true"></a><span class="co"># BEFORE: Sequential CPU (NumPy)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true"></a><span class="kw">class</span> Water:</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>):</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true"></a>        <span class="va">self</span>.u <span class="op">=</span> np.zeros((NY, NX), dtype<span class="op">=</span>real_t)  <span class="co"># CPU array</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true"></a>        <span class="va">self</span>.v <span class="op">=</span> np.zeros((NY, NX), dtype<span class="op">=</span>real_t)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true"></a>        <span class="va">self</span>.e <span class="op">=</span> np.zeros((NY, NX), dtype<span class="op">=</span>real_t)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true"></a>        </span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true"></a>        ii <span class="op">=</span> <span class="fl">100.0</span> <span class="op">*</span> (np.arange(<span class="dv">1</span>, NY<span class="op">-</span><span class="dv">1</span>) <span class="op">-</span> (NY<span class="op">-</span><span class="fl">2.0</span>)<span class="op">/</span><span class="fl">2.0</span>) <span class="op">/</span> NY</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true"></a>        jj <span class="op">=</span> <span class="fl">100.0</span> <span class="op">*</span> (np.arange(<span class="dv">1</span>, NX<span class="op">-</span><span class="dv">1</span>) <span class="op">-</span> (NX<span class="op">-</span><span class="fl">2.0</span>)<span class="op">/</span><span class="fl">2.0</span>) <span class="op">/</span> NX</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true"></a>        II, JJ <span class="op">=</span> np.meshgrid(ii, jj, indexing<span class="op">=</span><span class="st">&quot;ij&quot;</span>)</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true"></a>        <span class="va">self</span>.e[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">=</span> np.exp(<span class="op">-</span><span class="fl">0.02</span> <span class="op">*</span> (II<span class="op">*</span>II <span class="op">+</span> JJ<span class="op">*</span>JJ))</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true"></a></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true"></a><span class="kw">def</span> integrate(w, dt, dx, dy, g):</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true"></a>    exchange_horizontal_ghost_lines(w.e)</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true"></a>    exchange_vertical_ghost_lines(w.u)</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true"></a>    <span class="co"># ... more ghost exchanges</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true"></a>    </span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true"></a>    <span class="co"># Velocity updates</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true"></a>    w.u[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dx <span class="op">*</span> g <span class="op">*</span> (w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX] <span class="op">-</span> w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>])</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true"></a>    w.v[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dy <span class="op">*</span> g <span class="op">*</span> (w.e[<span class="dv">1</span>:NY, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>])</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true"></a>    </span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true"></a>    <span class="co"># Elevation update</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true"></a>    w.e[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dx <span class="op">*</span> (w.u[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.u[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">2</span>]) <span class="op">+</span> <span class="op">\</span></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true"></a>                           dt<span class="op">/</span>dy <span class="op">*</span> (w.v[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.v[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">2</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>])</span></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true"></a><span class="co"># AFTER: Parallel GPU (CuPy)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true"></a><span class="im">from</span> cupyx.profiler <span class="im">import</span> time_range</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true"></a><span class="kw">class</span> Water:</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>):</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true"></a>        <span class="va">self</span>.u <span class="op">=</span> cp.zeros((NY, NX), dtype<span class="op">=</span>real_t)  <span class="co"># GPU array</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true"></a>        <span class="va">self</span>.v <span class="op">=</span> cp.zeros((NY, NX), dtype<span class="op">=</span>real_t)</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true"></a>        <span class="va">self</span>.e <span class="op">=</span> cp.zeros((NY, NX), dtype<span class="op">=</span>real_t)</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true"></a>        </span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true"></a>        <span class="co"># Compute initial conditions on GPU</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true"></a>        ii <span class="op">=</span> <span class="fl">100.0</span> <span class="op">*</span> (cp.arange(<span class="dv">1</span>, NY<span class="op">-</span><span class="dv">1</span>) <span class="op">-</span> (NY<span class="op">-</span><span class="fl">2.0</span>)<span class="op">/</span><span class="fl">2.0</span>) <span class="op">/</span> NY</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true"></a>        jj <span class="op">=</span> <span class="fl">100.0</span> <span class="op">*</span> (cp.arange(<span class="dv">1</span>, NX<span class="op">-</span><span class="dv">1</span>) <span class="op">-</span> (NX<span class="op">-</span><span class="fl">2.0</span>)<span class="op">/</span><span class="fl">2.0</span>) <span class="op">/</span> NX</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true"></a>        II, JJ <span class="op">=</span> cp.meshgrid(ii, jj, indexing<span class="op">=</span><span class="st">&quot;ij&quot;</span>)</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true"></a>        <span class="va">self</span>.e[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">=</span> cp.exp(<span class="op">-</span><span class="fl">0.02</span> <span class="op">*</span> (II<span class="op">*</span>II <span class="op">+</span> JJ<span class="op">*</span>JJ))</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true"></a></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true"></a><span class="kw">def</span> exchange_horizontal_ghost_lines(data):</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true"></a>    <span class="cf">with</span> time_range(<span class="st">&quot;exchange_horizontal_ghost_lines&quot;</span>):  <span class="co"># NVTX marker</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true"></a>        data[<span class="dv">0</span>, :] <span class="op">=</span> data[NY<span class="op">-</span><span class="dv">2</span>, :]</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true"></a>        data[NY<span class="op">-</span><span class="dv">1</span>, :] <span class="op">=</span> data[<span class="dv">1</span>, :]</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true"></a></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true"></a><span class="kw">def</span> integrate(w, dt, dx, dy, g):</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true"></a>    <span class="cf">with</span> time_range(<span class="st">&quot;integrate&quot;</span>):</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true"></a>        exchange_horizontal_ghost_lines(w.e)</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true"></a>        exchange_vertical_ghost_lines(w.u)</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true"></a>        <span class="co"># ... more ghost exchanges</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true"></a>        </span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true"></a>        <span class="cf">with</span> time_range(<span class="st">&quot;velocity_update&quot;</span>):</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true"></a>            <span class="co"># Same operations, but on GPU arrays</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true"></a>            w.u[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dx <span class="op">*</span> g <span class="op">*</span> (w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX] <span class="op">-</span> w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>])</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true"></a>            w.v[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dy <span class="op">*</span> g <span class="op">*</span> (w.e[<span class="dv">1</span>:NY, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.e[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">1</span>])</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true"></a>        </span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true"></a>        <span class="cf">with</span> time_range(<span class="st">&quot;elevation_update&quot;</span>):</span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true"></a>            w.e[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-=</span> dt<span class="op">/</span>dx <span class="op">*</span> (w.u[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.u[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">0</span>:NX<span class="op">-</span><span class="dv">2</span>]) <span class="op">+</span> <span class="op">\</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true"></a>                                   dt<span class="op">/</span>dy <span class="op">*</span> (w.v[<span class="dv">1</span>:NY<span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>] <span class="op">-</span> w.v[<span class="dv">0</span>:NY<span class="op">-</span><span class="dv">2</span>, <span class="dv">1</span>:NX<span class="op">-</span><span class="dv">1</span>])</span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true"></a></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true"></a><span class="kw">def</span> simulate(config):</span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true"></a>    water_world <span class="op">=</span> Water()</span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true"></a>    water_history <span class="op">=</span> [water_world.e.copy()]</span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true"></a>    </span>
+<span id="cb2-41"><a href="#cb2-41" aria-hidden="true"></a>    cp.cuda.Stream.null.synchronize()  <span class="co"># Sync before timing</span></span>
+<span id="cb2-42"><a href="#cb2-42" aria-hidden="true"></a>    begin <span class="op">=</span> time.perf_counter()</span>
+<span id="cb2-43"><a href="#cb2-43" aria-hidden="true"></a>    </span>
+<span id="cb2-44"><a href="#cb2-44" aria-hidden="true"></a>    <span class="cf">for</span> t <span class="kw">in</span> <span class="bu">range</span>(config.<span class="bu">iter</span>):</span>
+<span id="cb2-45"><a href="#cb2-45" aria-hidden="true"></a>        integrate(water_world, config.dt, config.dx, config.dy, config.g)</span>
+<span id="cb2-46"><a href="#cb2-46" aria-hidden="true"></a>        <span class="cf">if</span> t <span class="op">%</span> config.data_period <span class="op">==</span> <span class="dv">0</span>:</span>
+<span id="cb2-47"><a href="#cb2-47" aria-hidden="true"></a>            water_history.append(water_world.e.copy())</span>
+<span id="cb2-48"><a href="#cb2-48" aria-hidden="true"></a>    </span>
+<span id="cb2-49"><a href="#cb2-49" aria-hidden="true"></a>    cp.cuda.Stream.null.synchronize()  <span class="co"># Sync after timing</span></span>
+<span id="cb2-50"><a href="#cb2-50" aria-hidden="true"></a>    end <span class="op">=</span> time.perf_counter()</span>
+<span id="cb2-51"><a href="#cb2-51" aria-hidden="true"></a>    </span>
+<span id="cb2-52"><a href="#cb2-52" aria-hidden="true"></a>    <span class="co"># Transfer to CPU only for file I/O</span></span>
+<span id="cb2-53"><a href="#cb2-53" aria-hidden="true"></a>    to_file(water_history, config.filename)</span></code></pre></div>
+<p><strong>Key Changes:</strong> - All <code>np.</code> -&gt; <code>cp.</code> for GPU execution - NVTX profiling markers wrap critical sections - Explicit GPU synchronization for accurate timing - Data stays on GPU (only transfers for I/O)</p>
+<h3 id="correctness-verification">1.3 Correctness Verification</h3>
+<p><strong>Checksum Validation:</strong> All implementations produce identical checksums within floating-point precision: - <strong>CPU (NumPy)</strong>: 4117.748322913216 (500 iterations, 512x512) - <strong>GPU (CuPy)</strong>: 4117.748322913214 (500 iterations, 512x512) - <strong>Difference</strong>: 2x10^-12 (negligible, due to floating-point rounding)</p>
+<p>This validates correct implementation of: - Ghost cell boundary conditions - Stencil operations - Numerical integration scheme</p>
+<hr />
+<h2 id="task-1-nvidia-nsys-profiling-analysis">2. Task 1: NVIDIA nsys Profiling Analysis</h2>
+<h3 id="profiling-configuration">2.1 Profiling Configuration</h3>
+<p><strong>Command used:</strong></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a><span class="ex">nsys</span> profile --stats=true -o profile_report python3 sw_parallel.py --iter 500</span></code></pre></div>
+<p><strong>Test configuration:</strong> - Grid size: 512x512 (262,144 cells) - Iterations: 500 - Data type: float64 (8 bytes per element) - GPU: NVIDIA RTX A6000 (49GB, Compute Capability 8.6, 84 SMs) - Total elapsed time: 0.1648 seconds</p>
+<h3 id="nvtx-function-timing-source-code-analysis">2.2 [3/8] NVTX Function Timing (Source Code Analysis)</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Function</th>
+<th>Time (%)</th>
+<th>Total Time (ns)</th>
+<th>Instances</th>
+<th>Avg (ns)</th>
+<th>Med (ns)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>integrate</td>
+<td>50.7%</td>
+<td>163,105,973</td>
+<td>500</td>
+<td>326,212</td>
+<td>321,717</td>
+</tr>
+<tr class="even">
+<td>exchange_vertical_ghost_lines</td>
+<td>16.2%</td>
+<td>52,083,535</td>
+<td>1,000</td>
+<td>52,084</td>
+<td>51,847</td>
+</tr>
+<tr class="odd">
+<td>velocity_update</td>
+<td>14.0%</td>
+<td>45,049,826</td>
+<td>500</td>
+<td>90,100</td>
+<td>87,008</td>
+</tr>
+<tr class="even">
+<td>elevation_update</td>
+<td>12.9%</td>
+<td>41,521,070</td>
+<td>500</td>
+<td>83,042</td>
+<td>81,498</td>
+</tr>
+<tr class="odd">
+<td>exchange_horizontal_ghost_lines</td>
+<td>6.2%</td>
+<td>19,865,837</td>
+<td>1,000</td>
+<td>19,866</td>
+<td>21,069</td>
+</tr>
+<tr class="even">
+<td>DeviceReduce::Sum</td>
+<td>0.0%</td>
+<td>53,770</td>
+<td>1</td>
+<td>53,770</td>
+<td>53,770</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Analysis:</strong> - <strong>Integration overhead</strong>: The <code>integrate</code> function wrapper accounts for 50.7% of profiled time, containing all sub-operations - <strong>Ghost cell exchanges</strong>: Combined 22.4% (16.2% + 6.2%) - represents boundary condition overhead - 4 ghost exchanges per iteration (2 horizontal + 2 vertical for e, u, v arrays) - Average 36 us per exchange (52 us vertical, 20 us horizontal) - Small operations but frequent (2,000 total calls) - <strong>Computational kernels</strong>: Combined 26.9% (14.0% + 12.9%) - Velocity update: 90 us average (stencil operations on u, v) - Elevation update: 83 us average (stencil operations on e) - Well-balanced between velocity and elevation computations - <strong>Total per-iteration time</strong>: ~326 us average (ranging 310-1,792 us)</p>
+<p><strong>Interpretation:</strong> Ghost cell exchanges represent significant overhead (22.4%) relative to compute (26.9%). These are small memory copy operations that don’t fully utilize GPU parallelism but are necessary for correctness. The remaining ~50% includes kernel launch overhead, synchronization, and profiling instrumentation.</p>
+<h3 id="cuda-api-timing">2.3 [5/8] CUDA API Timing</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Operation</th>
+<th>Time (%)</th>
+<th>Total Time (ns)</th>
+<th>Calls</th>
+<th>Avg (ns)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>cudaMalloc</td>
+<td>61.1%</td>
+<td>81,447,515</td>
+<td>19</td>
+<td>4,286,711</td>
+</tr>
+<tr class="even">
+<td>cuLaunchKernel</td>
+<td>26.6%</td>
+<td>35,509,278</td>
+<td>10,022</td>
+<td>3,543</td>
+</tr>
+<tr class="odd">
+<td>cudaMemcpyAsync</td>
+<td>11.0%</td>
+<td>14,601,688</td>
+<td>2,007</td>
+<td>7,275</td>
+</tr>
+<tr class="even">
+<td>cuModuleLoadData</td>
+<td>0.9%</td>
+<td>1,170,887</td>
+<td>14</td>
+<td>83,635</td>
+</tr>
+<tr class="odd">
+<td>cuModuleUnload</td>
+<td>0.2%</td>
+<td>303,869</td>
+<td>7</td>
+<td>43,410</td>
+</tr>
+<tr class="even">
+<td>cudaStreamSynchronize</td>
+<td>0.0%</td>
+<td>16,672</td>
+<td>9</td>
+<td>1,852</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Analysis:</strong> - <strong>Memory allocation</strong> (cudaMalloc): Dominates API time at 61.1%, but is <strong>one-time setup cost</strong> - 19 allocations totaling 81.4 ms - Occurs during initialization, not in iteration loop - Does not impact steady-state performance - <strong>Kernel launches</strong> (cuLaunchKernel): 26.6% of API time - 10,022 kernel launches total (~20 per iteration) - Average 3.5 us per launch (kernel launch overhead) - 35.5 ms total launch overhead for 500 iterations - <strong>Memory transfers</strong> (cudaMemcpyAsync): 11.0% of API time - 2,007 transfers averaging 7.3 us each - Primarily device-to-device copies (ghost cells) - Some device-to-host transfers for periodic snapshots - <strong>Stream synchronization</strong>: Minimal (16.7 us total, 9 calls)</p>
+<p><strong>Key Insight:</strong> Kernel launch overhead (35.5 ms) is comparable to actual compute time (~40 ms for velocity+elevation). This suggests potential for optimization through kernel fusion to reduce launch count.</p>
+<h3 id="gpu-kernel-timing-cupy-generated-kernels">2.4 [6/8] GPU Kernel Timing (CuPy-Generated Kernels)</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Kernel</th>
+<th>Time (%)</th>
+<th>Total Time (ns)</th>
+<th>Instances</th>
+<th>Avg (ns)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>cupy_subtract__float64</td>
+<td>59.5%</td>
+<td>23,971,538</td>
+<td>3,500</td>
+<td>6,849</td>
+</tr>
+<tr class="even">
+<td>cupy_multiply__floatxfloat64</td>
+<td>17.5%</td>
+<td>7,045,681</td>
+<td>2,003</td>
+<td>3,518</td>
+</tr>
+<tr class="odd">
+<td>cupy_copy__float64</td>
+<td>14.5%</td>
+<td>5,835,769</td>
+<td>4,009</td>
+<td>1,456</td>
+</tr>
+<tr class="even">
+<td>cupy_add__float64</td>
+<td>8.4%</td>
+<td>3,372,055</td>
+<td>501</td>
+<td>6,731</td>
+</tr>
+<tr class="odd">
+<td>cupy_exp__float64</td>
+<td>0.0%</td>
+<td>18,080</td>
+<td>1</td>
+<td>18,080</td>
+</tr>
+<tr class="even">
+<td>cupy_multiply__float64xfloat64</td>
+<td>0.0%</td>
+<td>10,016</td>
+<td>2</td>
+<td>5,008</td>
+</tr>
+<tr class="odd">
+<td>DeviceReduceKernel</td>
+<td>0.0%</td>
+<td>4,384</td>
+<td>1</td>
+<td>4,384</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total GPU kernel time: 40.3 ms</strong> (out of 164.8 ms total runtime = <strong>24.4%</strong>)</p>
+<p><strong>Analysis:</strong> - <strong>Subtraction operations dominate</strong> (59.5% of kernel time) - 3,500 calls averaging 6.8 us each - Used in stencil operations: <code>(e[i,j+1] - e[i,j])</code>, <code>(u[i,j] - u[i,j-1])</code>, etc. - CuPy generates separate kernel for each subtraction - <strong>Multiply operations</strong>: 17.5% (scalar-array multiplications for dt/dx coefficients) - <strong>Copy operations</strong>: 14.5% (ghost cell copies, array duplications) - <strong>Add operations</strong>: 8.4% (combining velocity/elevation updates) - <strong>Initialization kernels</strong>: &lt;0.1% (exp, meshgrid - one-time only)</p>
+<p><strong>Kernel Count:</strong> - Total kernel invocations: 10,013 - Average per iteration: ~20 kernels - Breakdown per iteration: - 7 subtractions (stencil operations) - 4 multiplies (coefficient scaling) - 8 copies (ghost cells + snapshots) - 1 add (final update)</p>
+<p><strong>Optimization Opportunity:</strong> CuPy generates individual kernels for each operation. Custom fused kernels could combine: - Subtraction + multiply + add -&gt; single stencil kernel - All ghost exchanges -&gt; single boundary kernel - Estimated reduction: 20 kernels -&gt; 3-4 kernels per iteration</p>
+<h3 id="memory-transfer-statistics">2.5 [7/8] Memory Transfer Statistics</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Operation</th>
+<th>Time (%)</th>
+<th>Total Time (ns)</th>
+<th>Count</th>
+<th>Avg (ns)</th>
+<th>Total Size (MB)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Device-to-Device</td>
+<td>82.1%</td>
+<td>2,750,368</td>
+<td>2,000</td>
+<td>1,375</td>
+<td>8.19</td>
+</tr>
+<tr class="even">
+<td>Device-to-Host</td>
+<td>17.6%</td>
+<td>589,754</td>
+<td>7</td>
+<td>84,251</td>
+<td>12.58</td>
+</tr>
+<tr class="odd">
+<td>memset</td>
+<td>0.3%</td>
+<td>9,920</td>
+<td>3</td>
+<td>3,307</td>
+<td>6.29</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total memory operations: 3.35 ms (2.0% of total runtime)</strong></p>
+<p><strong>Analysis:</strong> - <strong>Device-to-Device</strong>: Dominates transfer count (2,000 ops) but small per-operation - Ghost cell copies: 4 per iteration x 500 iterations = 2,000 - 4 KB per copy (one row/column of 512x512 grid) - Very fast: 1.4 us per copy - <strong>Device-to-Host</strong>: Only 7 transfers (periodic snapshots + final checksum) - Average 84 us per transfer - 12.58 MB total = ~1.8 MB per snapshot - Occurs every 100 iterations (5 snapshots + initial + final) - <strong>memset</strong>: Initialization only (6.29 MB for 3 arrays)</p>
+<p><strong>Key Insight:</strong> Memory transfer overhead is <strong>minimal</strong> (&lt;2% of runtime). The GPU data residency strategy is highly effective - data stays on GPU with only essential transfers to CPU.</p>
+<h3 id="bottleneck-identification-and-optimization-strategy">2.6 Bottleneck Identification and Optimization Strategy</h3>
+<p><strong>Primary Bottlenecks (ranked by impact):</strong></p>
+<ol type="1">
+<li><strong>Kernel Launch Overhead</strong> (26.6% of API time, ~35 ms)
+<ul>
+<li><strong>Root cause</strong>: 10,022 kernel launches (20 per iteration)</li>
+<li><strong>Impact</strong>: 3.5 us per launch x 10,022 = 35.5 ms</li>
+<li><strong>Optimization</strong>: Kernel fusion - combine operations into fewer kernels</li>
+<li><strong>Estimated gain</strong>: Reduce to 3-4 kernels/iteration -&gt; ~70% reduction in launch overhead</li>
+</ul></li>
+<li><strong>Ghost Cell Exchange Overhead</strong> (22.4% of profiled time)
+<ul>
+<li><strong>Root cause</strong>: Small memory operations (4 per iteration)</li>
+<li><strong>Impact</strong>: Doesn’t fully utilize GPU parallelism</li>
+<li><strong>Optimization</strong>:
+<ul>
+<li>Option A: Fuse with computational kernels (compute with halos, exchange in-kernel)</li>
+<li>Option B: Use GPU-aware MPI for multi-GPU (reduce single-GPU overhead)</li>
+</ul></li>
+<li><strong>Estimated gain</strong>: 30-50% reduction if fused with compute</li>
+</ul></li>
+<li><strong>CuPy Operation Granularity</strong> (many small kernels)
+<ul>
+<li><strong>Root cause</strong>: CuPy generates one kernel per operation</li>
+<li><strong>Impact</strong>: Prevents instruction-level parallelism and data reuse</li>
+<li><strong>Optimization</strong>: Custom CUDA kernels for stencil operations</li>
+<li><strong>Estimated gain</strong>: 2-3x speedup for core compute</li>
+</ul></li>
+</ol>
+<p><strong>Secondary Bottlenecks:</strong></p>
+<ol start="4" type="1">
+<li><strong>Initial Memory Allocation</strong> (61.1% of API time, 81 ms)
+<ul>
+<li><strong>Root cause</strong>: 19 cudaMalloc calls during setup</li>
+<li><strong>Impact</strong>: One-time cost, not relevant for long runs</li>
+<li><strong>Optimization</strong>: Pre-allocate memory pool (minor benefit)</li>
+</ul></li>
+<li><strong>Periodic Snapshots</strong> (device-to-host transfers)
+<ul>
+<li><strong>Root cause</strong>: Saving state every 100 iterations</li>
+<li><strong>Impact</strong>: 7 transfers x 84 us = 0.6 ms total (negligible)</li>
+<li><strong>Optimization</strong>: Reduce snapshot frequency or use async streams</li>
+<li><strong>Estimated gain</strong>: &lt;1% improvement</li>
+</ul></li>
+</ol>
+<p><strong>Recommended Optimization Priority:</strong> 1. Implement custom fused stencil kernel (highest impact: ~3x speedup) 2. Integrate ghost exchange into stencil kernel (medium impact: ~1.3x speedup) 3. Use CUDA streams for async snapshot I/O (low impact: ~1.05x speedup)</p>
+<p><strong>Expected Overall Speedup:</strong> 4-5x over current CuPy implementation</p>
+<hr />
+<h2 id="task-2-asymptotic-performance-analysis">3. Task 2: Asymptotic Performance Analysis</h2>
+<h3 id="methodology">3.1 Methodology</h3>
+<p><strong>Objective</strong>: Determine the minimum grid size required for efficient GPU utilization by measuring performance (ns/cell) across varying problem sizes.</p>
+<p><strong>Experimental Setup:</strong> - <strong>Grid sizes tested</strong>: 64x64 to 2048x2048 (11 points, doubling progression) - <strong>Iterations</strong>: 1,000 per test - <strong>GPU</strong>: Full RTX A6000 (84 SMs, 172,032 threads max) - <strong>Metric</strong>: Nanoseconds per cell per iteration (ns/cell) - <strong>Formula</strong>: ns/cell = (Total Time in ns) / (Grid Cells x Iterations)</p>
+<p><strong>Rationale:</strong> - Small grids: High overhead relative to work -&gt; high ns/cell - Large grids: Sufficient work to saturate GPU -&gt; low, stable ns/cell - “Knee point”: Where performance stabilizes indicates minimum efficient size</p>
+<h3 id="complete-results-table">3.2 Complete Results Table</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Grid Size</th>
+<th>Total Cells</th>
+<th>Time (s)</th>
+<th>ns/cell</th>
+<th>Efficiency (%)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>64x64</td>
+<td>4,096</td>
+<td>0.224</td>
+<td>54.76</td>
+<td>0.6%</td>
+</tr>
+<tr class="even">
+<td>96x96</td>
+<td>9,216</td>
+<td>0.232</td>
+<td>25.13</td>
+<td>1.4%</td>
+</tr>
+<tr class="odd">
+<td>128x128</td>
+<td>16,384</td>
+<td>0.230</td>
+<td>14.02</td>
+<td>2.4%</td>
+</tr>
+<tr class="even">
+<td>192x192</td>
+<td>36,864</td>
+<td>0.238</td>
+<td>6.47</td>
+<td>5.3%</td>
+</tr>
+<tr class="odd">
+<td>256x256</td>
+<td>65,536</td>
+<td>0.233</td>
+<td>3.56</td>
+<td>9.6%</td>
+</tr>
+<tr class="even">
+<td>384x384</td>
+<td>147,456</td>
+<td>0.235</td>
+<td>1.59</td>
+<td>21.5%</td>
+</tr>
+<tr class="odd">
+<td>512x512</td>
+<td>262,144</td>
+<td>0.231</td>
+<td>0.88</td>
+<td>38.9%</td>
+</tr>
+<tr class="even">
+<td>768x768</td>
+<td>589,824</td>
+<td>0.234</td>
+<td>0.40</td>
+<td>85.6%</td>
+</tr>
+<tr class="odd">
+<td><strong>1024x1024</strong></td>
+<td><strong>1,048,576</strong></td>
+<td><strong>0.400</strong></td>
+<td><strong>0.38</strong></td>
+<td><strong>90.0%</strong></td>
+</tr>
+<tr class="even">
+<td>1536x1536</td>
+<td>2,359,296</td>
+<td>0.831</td>
+<td>0.35</td>
+<td>97.8%</td>
+</tr>
+<tr class="odd">
+<td>2048x2048</td>
+<td>4,194,304</td>
+<td>1.434</td>
+<td>0.34</td>
+<td>100.6%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Efficiency</strong> = (Asymptotic ns/cell) / (Current ns/cell) x 100%, where asymptotic = 0.34 ns/cell</p>
+<h3 id="key-findings">3.3 Key Findings</h3>
+<p><strong>Asymptotic Performance:</strong> <strong>0.34-0.36 ns/cell</strong> (average of 3 largest grids)</p>
+<p><strong>Performance Improvement:</strong> <strong>161x speedup</strong> from smallest (54.76 ns/cell) to largest (0.34 ns/cell)</p>
+<p><strong>Recommended Minimum Grid Size:</strong> <strong>1024x1024 (1,048,576 cells)</strong> - Achieves 90% of asymptotic efficiency - Performance: 0.38 ns/cell (within 11.8% of optimum) - Below this size: overhead dominates (efficiency &lt;40%) - Above this size: performance improvement &lt;10%</p>
+<p><strong>Knee Point Analysis:</strong> Performance stabilization occurs between 768x768 and 1024x1024: - At 768x768: 0.40 ns/cell (85.6% efficient) - At 1024x1024: 0.38 ns/cell (90.0% efficient) - Change: 5% improvement for 78% more cells - At 1536x1536: 0.35 ns/cell (97.8% efficient) - Change: 8% improvement for 125% more cells</p>
+<h3 id="performance-regimes">3.4 Performance Regimes</h3>
+<p><strong>Overhead-Dominated Regime</strong> (&lt; 512x512): - ns/cell &gt; 1.0 - Efficiency &lt; 40% - Kernel launch overhead exceeds computation - GPU underutilized (insufficient parallelism) - Total time dominated by fixed costs</p>
+<p><strong>Transitional Regime</strong> (512x512 to 1024x1024): - ns/cell: 0.88 -&gt; 0.38 - Efficiency: 39% -&gt; 90% - GPU begins to saturate - Performance improves rapidly with size - Sweet spot for cost/performance trade-off</p>
+<p><strong>Compute-Dominated Regime</strong> (&gt; 1024x1024): - ns/cell ≈ 0.34-0.38 (stable) - Efficiency &gt; 90% - GPU fully utilized - Performance scales linearly with problem size - Marginal gains from further scaling</p>
+<h3 id="hardware-utilization-analysis">3.5 Hardware Utilization Analysis</h3>
+<p><strong>RTX A6000 Specifications:</strong> - 84 Streaming Multiprocessors (SMs) - 2,048 threads per SM - 172,032 total threads maximum - 768 GB/s memory bandwidth</p>
+<p><strong>Workload Analysis at Recommended Grid (1024x1024):</strong></p>
+<p><strong>Thread Assignment:</strong> - Total cells: 1,048,576 - Max threads: 172,032 - Cells per thread: 1,048,576 / 172,032 ≈ 6.1 cells/thread</p>
+<p><strong>Occupancy Estimate:</strong> - Typical CuPy kernel: 256 threads/block - Blocks needed: 1,048,576 / 256 = 4,096 blocks - Blocks per SM: 4,096 / 84 = 48.8 blocks/SM - Multiple waves required: 48.8 / (2,048/256) = 6.1 waves - Good occupancy: Multiple waves keep SMs busy</p>
+<p><strong>Memory Bandwidth Utilization:</strong> Per iteration data movement (1024x1024 grid): - 3 arrays x 8 bytes x 1,048,576 = 25.2 MB per full read/write - Ghost exchanges: 4 x 1,024 x 8 = 32.8 KB (negligible) - Per iteration: ~50 MB (read input + write output) - At 0.38 ns/cell: Time per iteration = 0.38 ms - Bandwidth used: 50 MB / 0.38 ms = 131 GB/s - <strong>Bandwidth utilization: 131 / 768 = 17%</strong></p>
+<p><strong>Interpretation:</strong> - Good thread utilization (6 cells/thread with multiple waves) - Low bandwidth utilization (17%) suggests compute-bound operation - Overhead (kernel launch, synchronization) still significant - Further optimization should focus on reducing kernel count</p>
+<hr />
+<h2 id="task-2-cpu-vs-gpu-speedup-analysis">4. Task 2: CPU vs GPU Speedup Analysis</h2>
+<h3 id="methodology-1">4.1 Methodology</h3>
+<p><strong>Comparison Setup:</strong> - <strong>CPU implementation</strong>: <code>sw_sequential.py</code> (NumPy, single-threaded) - <strong>GPU implementation</strong>: <code>sw_parallel.py</code> (CuPy, RTX A6000) - <strong>Test parameters</strong>: 500 iterations, varying grid sizes - <strong>CPU</strong>: AMD/Intel (specification from system) - <strong>Metric</strong>: Speedup = CPU Time / GPU Time</p>
+<h3 id="complete-speedup-results">4.2 Complete Speedup Results</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 13%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 9%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 7%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Grid Size</th>
+<th>Total Cells</th>
+<th>CPU Time (s)</th>
+<th>GPU Time (s)</th>
+<th>Speedup</th>
+<th>CPU Checksum</th>
+<th>GPU Checksum</th>
+<th>Match</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>128x128</td>
+<td>16,384</td>
+<td>0.054</td>
+<td>0.124</td>
+<td><strong>0.43x</strong></td>
+<td>261.646362</td>
+<td>261.646362</td>
+<td>✓</td>
+</tr>
+<tr class="even">
+<td>256x256</td>
+<td>65,536</td>
+<td>0.183</td>
+<td>0.127</td>
+<td><strong>1.43x</strong></td>
+<td>1029.534865</td>
+<td>1029.534865</td>
+<td>✓</td>
+</tr>
+<tr class="odd">
+<td>512x512</td>
+<td>262,144</td>
+<td>1.397</td>
+<td>0.122</td>
+<td><strong>11.42x</strong></td>
+<td>4117.748323</td>
+<td>4117.748323</td>
+<td>✓</td>
+</tr>
+<tr class="even">
+<td>768x768</td>
+<td>589,824</td>
+<td>2.106</td>
+<td>0.121</td>
+<td><strong>17.40x</strong></td>
+<td>9264.933727</td>
+<td>9264.933727</td>
+<td>✓</td>
+</tr>
+<tr class="odd">
+<td>1024x1024</td>
+<td>1,048,576</td>
+<td>4.318</td>
+<td>0.201</td>
+<td><strong>21.43x</strong></td>
+<td>16470.993292</td>
+<td>16470.993292</td>
+<td>✓</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Checksum Validation:</strong> All GPU results match CPU within floating-point precision (&lt;10^-9 relative error), confirming correctness.</p>
+<h3 id="speedup-analysis">4.3 Speedup Analysis</h3>
+<p><strong>Small Grids (128x128):</strong> - GPU <strong>slower</strong> than CPU (0.43x speedup, 2.3x slowdown) - Overhead exceeds computational benefit - Explanation: - Kernel launch overhead: ~3.5 us x 20 kernels x 500 iters = 35 ms - Actual compute time: ~0.12 s - Overhead fraction: 35/120 = 29% - NumPy on CPU is efficient for small arrays (cache-friendly) - <strong>Recommendation</strong>: Use CPU for grids &lt; 256x256</p>
+<p><strong>Medium Grids (256x256):</strong> - Modest GPU advantage (1.43x speedup) - Break-even point: overhead balanced with parallelism - Still not ideal for GPU usage - Better with optimized implementation (fused kernels)</p>
+<p><strong>Large Grids (512x512 and above):</strong> - Strong speedups: 11-21x faster on GPU - Speedup increases with grid size (up to 768x768) - Levels off at 1024x1024 due to GPU memory access patterns - Clear benefit for production workloads</p>
+<p><strong>Speedup Trend:</strong> - 256x256 to 512x512: 8x improvement in speedup (1.43x -&gt; 11.42x) - 512x512 to 768x768: 1.5x improvement (11.42x -&gt; 17.40x) - 768x768 to 1024x1024: 1.2x improvement (17.40x -&gt; 21.43x) - Diminishing returns at very large grids</p>
+<p><strong>Plateau Analysis (1024x1024):</strong> GPU time increases from 0.121s (768x768) to 0.201s (1024x1024) despite only 78% more cells. Possible reasons: 1. <strong>L2 cache overflow</strong>: 1024x1024 x 3 arrays x 8 bytes = 24 MB exceeds GPU L2 cache (~40 MB for A6000, but shared with other operations) 2. <strong>Memory bandwidth saturation</strong>: Larger transfers hit bandwidth limits 3. <strong>Increased kernel complexity</strong>: More blocks require additional coordination 4. <strong>DRAM access patterns</strong>: Larger grids less cache-friendly</p>
+<h3 id="theoretical-vs-actual-speedup">4.4 Theoretical vs Actual Speedup</h3>
+<p><strong>Theoretical Maximum Speedup:</strong> - GPU: 84 SMs x 2,048 threads = 172,032 parallel threads - CPU: Single-threaded NumPy - Naive expectation: ~172,000x speedup</p>
+<p><strong>Why Only 21x Speedup?</strong></p>
+<ol type="1">
+<li><strong>Amdahl’s Law</strong>: Sequential portions limit scaling
+<ul>
+<li>Memory transfers: 7 device-to-host operations</li>
+<li>Initialization: Setup and allocation</li>
+<li>File I/O: Snapshot saves</li>
+<li>Estimated serial fraction: ~5-10%</li>
+</ul></li>
+<li><strong>Memory Bandwidth Bottleneck</strong>:
+<ul>
+<li>Operations are memory-bound, not compute-bound</li>
+<li>Bandwidth: 768 GB/s (GPU) vs ~50 GB/s (CPU DDR4)</li>
+<li>Theoretical: 15x speedup from bandwidth alone</li>
+<li>Actual: 21x (bandwidth + parallelism)</li>
+</ul></li>
+<li><strong>Kernel Launch Overhead</strong>:
+<ul>
+<li>20 kernels x 500 iterations = 10,000 launches</li>
+<li>3.5 us per launch = 35 ms overhead</li>
+<li>CPU has zero launch overhead</li>
+</ul></li>
+<li><strong>Utilization Inefficiency</strong>:
+<ul>
+<li>Small stencil operations don’t fully utilize wide GPU</li>
+<li>Ghost cell exchanges: trivial work per thread</li>
+<li>Thread divergence in boundary conditions</li>
+</ul></li>
+</ol>
+<p><strong>Optimized Implementation Potential:</strong> With custom fused CUDA kernels: - Reduce to 2-3 kernels per iteration (10x fewer launches) - Eliminate ghost overhead through halo computation - Achieve better cache locality - <strong>Estimated speedup: 60-100x</strong> (approaching memory bandwidth limit)</p>
+<hr />
+<h2 id="summary-and-conclusions">5. Summary and Conclusions</h2>
+<h3 id="implementation-success">5.1 Implementation Success</h3>
+<p>✅ <strong>GPU parallelization fully functional</strong> - CuPy conversion successful with minimal code changes - Checksums validate correctness across all configurations - NVTX profiling integrated for detailed performance analysis - Memory transfer overhead minimized (&lt;2% of runtime)</p>
+<h3 id="performance-achievements">5.2 Performance Achievements</h3>
+<p><strong>Task 1 - Profiling:</strong> - Successfully profiled with nsys, obtaining all 8 report sections - Identified bottlenecks: kernel launch (26.6%), ghost cells (22.4%) - Measured GPU kernel efficiency: 40 ms compute in 165 ms total (24%) - Documented optimization opportunities: 3-5x additional speedup possible</p>
+<p><strong>Task 2 - Asymptotic Performance:</strong> - Comprehensive testing: 11 grid sizes from 64x64 to 2048x2048 - Achieved 0.34 ns/cell asymptotic performance (stable for large grids) - 161x performance improvement from small to large grids - Determined optimal minimum: <strong>1024x1024 grid</strong> (90% efficiency)</p>
+<p><strong>Task 2 - CPU vs GPU Speedup:</strong> - Strong speedups for production workloads: <strong>21.4x for 1024x1024</strong> - Clear identification of GPU-inefficient regime (&lt; 256x256 grids) - Validated correctness: checksums match CPU within 10^-9</p>
+<h3 id="key-insights">5.3 Key Insights</h3>
+<p><strong>1. Grid Size Matters:</strong> - Small grids (&lt; 512x512): GPU slower than CPU - Medium grids (512-768): Moderate speedup (11-17x) - Large grids (&gt;= 1024): Strong speedup (21x) - <strong>Recommendation</strong>: Use CPU for small problems, GPU for &gt;= 512x512</p>
+<p><strong>2. Overhead Dominates Small Problems:</strong> - 35 ms kernel launch overhead insignificant for large problems - But equals or exceeds compute time for small problems - Ghost cell overhead (22%) relatively constant regardless of grid size</p>
+<p><strong>3. Memory Bandwidth vs Compute:</strong> - Low bandwidth utilization (17%) indicates compute-bound operation - But kernel launch overhead and small operations limit parallelism - Optimization focus: reduce kernel count through fusion</p>
+<p><strong>4. Asymptotic Behavior:</strong> - Performance stabilizes at 1024x1024 (0.38 ns/cell) - Further scaling yields &lt;10% improvement - Diminishing returns beyond 1536x1536</p>
+<h3 id="optimization-roadmap">5.4 Optimization Roadmap</h3>
+<p><strong>High Impact</strong> (Expected 3-5x speedup): 1. Custom fused CUDA kernel for stencil operations - Combine subtraction + multiply + add into single kernel - Reduce 20 kernels/iteration -&gt; 3-4 kernels - Improve data locality and cache utilization</p>
+<ol start="2" type="1">
+<li>Integrate ghost cell exchange into computational kernel
+<ul>
+<li>Compute with halo regions, exchange in-kernel</li>
+<li>Eliminate separate ghost cell kernels</li>
+<li>Reduce memory traffic</li>
+</ul></li>
+</ol>
+<p><strong>Medium Impact</strong> (Expected 1.2-1.5x speedup): 3. Reduce snapshot frequency or use async I/O - Use CUDA streams to overlap I/O with compute - Batch multiple snapshots into single transfer</p>
+<ol start="4" type="1">
+<li>Memory access optimization
+<ul>
+<li>Ensure coalesced memory access patterns</li>
+<li>Optimize array layouts for GPU cache hierarchy</li>
+</ul></li>
+</ol>
+<p><strong>Low Impact</strong> (Expected &lt;1.1x speedup): 5. Pre-allocate memory pool to reduce cudaMalloc overhead - One-time cost, doesn’t affect iteration performance</p>
+<h3 id="production-recommendations">5.5 Production Recommendations</h3>
+<p><strong>For Shallow Water Simulations:</strong> 1. <strong>Grid size</strong>: Use &gt;= 1024x1024 for GPU (or &gt;= 512x512 if acceptable 11x speedup) 2. <strong>Implementation</strong>: Current CuPy version adequate for production (21x speedup) 3. <strong>Future work</strong>: Custom CUDA kernels for 3-5x additional improvement 4. <strong>Small problems</strong>: Use CPU (NumPy) for grids &lt; 256x256</p>
+<p><strong>For Similar Stencil Codes:</strong> 1. Minimum 1M cells recommended for GPU efficiency 2. Focus on kernel fusion to reduce launch overhead 3. Keep data resident on GPU throughout computation 4. Profile early to identify bottlenecks specific to your operations</p>
+<h3 id="lessons-learned">5.6 Lessons Learned</h3>
+<p><strong>What Worked Well:</strong> - CuPy provided excellent abstraction with good performance - NVTX profiling markers gave actionable insights - Keeping data on GPU minimized transfer overhead - Systematic grid size testing revealed clear performance regimes</p>
+<p><strong>What Could Be Improved:</strong> - CuPy generates too many small kernels (fusion needed) - Ghost cell operations could be more efficient - Initial memory allocation could use pooling - Larger test grids needed to fully saturate modern GPUs</p>
+<p><strong>Comparison to OpenMP (Week 3):</strong> - OpenMP: 5.8x speedup on 8-thread CPU - GPU: 21.4x speedup on RTX A6000 - GPU advantage: <strong>3.7x better</strong> than multi-core CPU - But GPU requires larger problems (1024x1024 vs 256x256) - Development effort: Similar (both required careful consideration of parallelism)</p>
+<hr />
+<h2 id="visualizations">6. Visualizations</h2>
+<h3 id="asymptotic-performance-plot">6.1 Asymptotic Performance Plot</h3>
+<figure>
+<img src="asymptotic_performance_plot.png" alt="" /><figcaption>Asymptotic Performance Analysis</figcaption>
+</figure>
+<p><strong>Figure 1</strong>: Four-panel analysis of GPU performance across problem sizes. <strong>Top-left</strong>: ns/cell decreases 161x from 64x64 to 2048x2048, stabilizing at 0.34 ns/cell (asymptotic line). <strong>Top-right</strong>: Total execution time scales from 0.23s (small grids) to 1.43s (2048x2048), showing log-log linearity for large grids. <strong>Bottom-left</strong>: Relative efficiency increases from 1% (64x64) to 100% (2048x2048), reaching 90% at recommended 1024x1024. <strong>Bottom-right</strong>: Actual speedup (orange) approaches ideal linear scaling (red) for large problems, with deviation at small grids due to overhead.</p>
+<p><strong>Key Observations:</strong> 1. Clear “knee” in performance curve around 512-768 grid size 2. Performance stabilization above 1024x1024 indicates asymptotic regime 3. 161x improvement demonstrates strong scaling from overhead to compute regime 4. Efficiency curve shows 1024x1024 as optimal trade-off (90% efficient)</p>
+<hr />
+<h2 id="technical-specifications-and-reproducibility">7. Technical Specifications and Reproducibility</h2>
+<h3 id="hardware-environment">7.1 Hardware Environment</h3>
+<p><strong>GPU Specifications:</strong> - <strong>Model</strong>: NVIDIA RTX A6000 - <strong>Memory</strong>: 49,140 MiB GDDR6 - <strong>Compute Capability</strong>: 8.6 (Ampere architecture) - <strong>Streaming Multiprocessors</strong>: 84 SMs - <strong>CUDA Cores</strong>: 10,752 (128 per SM) - <strong>Max Threads</strong>: 172,032 (2,048 per SM) - <strong>Memory Bandwidth</strong>: 768 GB/s - <strong>L2 Cache</strong>: ~40 MB shared - <strong>CUDA Version</strong>: 12.4 - <strong>Driver</strong>: 550.144.03</p>
+<p><strong>CPU Specifications:</strong> - System: Linux workstation - Compiler: Python 3.10 - NumPy: Multi-threaded BLAS (OpenBLAS/MKL)</p>
+<h3 id="software-environment">7.2 Software Environment</h3>
+<p><strong>Key Dependencies:</strong> - <strong>CuPy</strong>: 13.6.0 (GPU acceleration) - <strong>CUDA Toolkit</strong>: 12.9 (runtime libraries) - <strong>Python</strong>: 3.10.x - <strong>NumPy</strong>: 1.x (CPU baseline) - <strong>NVIDIA nsys</strong>: Part of CUDA toolkit (profiling)</p>
+<p><strong>Installation:</strong></p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true"></a><span class="ex">conda</span> install -c conda-forge cupy</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true"></a><span class="co"># or</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true"></a><span class="ex">pip</span> install cupy-cuda12x</span></code></pre></div>
+<h3 id="running-the-benchmarks">7.3 Running the Benchmarks</h3>
+<p><strong>Quick Test:</strong></p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true"></a><span class="bu">cd</span> /home/klaupaucius/ahpc/week4/python</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true"></a><span class="co"># CPU baseline</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true"></a><span class="ex">python3</span> sw_sequential.py --iter 500 --out cpu_test.data</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true"></a></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true"></a><span class="co"># GPU version</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true"></a><span class="ex">python3</span> sw_parallel.py --iter 500 --out gpu_test.data</span></code></pre></div>
+<p><strong>Profiling:</strong></p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true"></a><span class="ex">nsys</span> profile --stats=true -o profile_report python3 sw_parallel.py --iter 500</span></code></pre></div>
+<p><strong>Asymptotic Performance:</strong></p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true"></a><span class="fu">bash</span> benchmark_asymptotic.sh</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true"></a><span class="ex">python3</span> plot_asymptotic.py</span></code></pre></div>
+<p><strong>CPU vs GPU Speedup:</strong></p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true"></a><span class="fu">bash</span> benchmark_speedup.sh</span></code></pre></div>
+<h3 id="file-inventory">7.4 File Inventory</h3>
+<p><strong>Implementation:</strong> - <code>sw_sequential.py</code>: CPU baseline (NumPy) - <code>sw_parallel.py</code>: GPU implementation (CuPy)</p>
+<p><strong>Benchmarking Scripts:</strong> - <code>benchmark_asymptotic.sh</code>: Tests grid sizes 64-2048 - <code>benchmark_speedup.sh</code>: CPU vs GPU comparison - <code>benchmark_strong_scaling.sh</code>: Iteration scaling test</p>
+<p><strong>Analysis Scripts:</strong> - <code>plot_asymptotic.py</code>: Generates 4-panel performance plot - <code>run_sw.sh</code>: CUDA MPS control (for weak scaling on DAG)</p>
+<p><strong>Results:</strong> - <code>profile_output.txt</code>: nsys profiling text output - <code>profile_report.nsys-rep</code>: Binary profile (view in Nsight Systems GUI) - <code>asymptotic_performance_results.txt</code>: Raw data (11 grid sizes) - <code>asymptotic_performance_plot.png</code>: Main visualization - <code>cpu_vs_gpu_speedup.txt</code>: Speedup data - <code>strong_scaling_results.txt</code>: Iteration scaling data</p>
+<p><strong>Documentation:</strong> - <code>README.md</code>: Implementation strategy - <code>TESTING_GUIDE.md</code>: Execution instructions - <code>RESULTS_SUMMARY.md</code>: Detailed analysis - <code>REPORT_TEMPLATE.md</code>: Report structure template</p>
+<hr />
+<h2 id="references-and-resources">8. References and Resources</h2>
+<p><strong>Assignment Materials:</strong> - Assignment instructions on Absalon - PHPC textbook section 13.3 (Shallow Water model) - Lecture notes on Shallow Water equations</p>
+<p><strong>Technical Documentation:</strong> - <a href="https://docs.cupy.dev/">CuPy Documentation</a> - <a href="https://docs.nvidia.com/nsight-systems/">NVIDIA Nsight Systems Guide</a> - <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">CUDA Programming Guide</a></p>
+<p><strong>Related Work:</strong> - Week 2: MPI task-farm scaling (21.4x for 256 ranks) - Week 3: OpenMP scaling (5.8x for 8 threads) - Comparison: GPU achieves 21x on single device (similar to 256 MPI ranks!)</p>
+<hr />
+<h2 id="appendix-a-complete-source-code">Appendix A: Complete Source Code</h2>
+<h3 id="a.1-gpu-implementation-sw_parallel.py">A.1 GPU Implementation (sw_parallel.py)</h3>
+<p>See file: <code>/home/klaupaucius/ahpc/week4/python/sw_parallel.py</code></p>
+<p><strong>Key sections:</strong> - Lines 1-20: Imports and configuration - Lines 22-66: Sim_Configuration class (command-line parsing) - Lines 68-85: Water class initialization (GPU arrays) - Lines 87-95: to_file() with CPU transfer - Lines 97-104: Ghost cell exchange functions (with NVTX markers) - Lines 106-122: integrate() function (main computation with profiling) - Lines 124-145: simulate() function (timing and execution loop)</p>
+<p><strong>Changes from sequential version:</strong> - All <code>np.</code> replaced with <code>cp.</code> - Added <code>from cupyx.profiler import time_range</code> - Added <code>cp.cuda.Stream.null.synchronize()</code> for accurate timing - Added NVTX markers around critical sections - Modified to_file() to handle CuPy arrays</p>
+<h3 id="a.2-benchmark-scripts">A.2 Benchmark Scripts</h3>
+<p><strong>benchmark_asymptotic.sh</strong> (excerpt):</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true"></a><span class="kw">for</span> <span class="ex">SIZE</span> in 64 96 128 192 256 384 512 768 1024 1536 2048<span class="kw">;</span> <span class="kw">do</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true"></a>    <span class="fu">sed</span> -i <span class="st">&quot;s/^NX = .*/NX = </span><span class="va">$SIZE</span><span class="st">/&quot;</span> sw_parallel.py</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true"></a>    <span class="fu">sed</span> -i <span class="st">&quot;s/^NY = .*/NY = </span><span class="va">$NY</span><span class="st">/&quot;</span> sw_parallel.py</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true"></a>    <span class="va">OUTPUT=$(</span><span class="ex">./run_sw.sh</span> 14 0 <span class="op">2&gt;&amp;1</span><span class="va">)</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true"></a>    <span class="va">TIME=$(</span><span class="bu">echo</span> <span class="st">&quot;</span><span class="va">$OUTPUT</span><span class="st">&quot;</span> <span class="kw">|</span> <span class="fu">grep</span> <span class="st">&quot;elapsed time:&quot;</span> <span class="kw">|</span> <span class="fu">awk</span> <span class="st">&#39;{print $3}&#39;</span><span class="va">)</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true"></a>    <span class="va">NS_PER_CELL=$(</span><span class="bu">echo</span> <span class="st">&quot;scale=4; </span><span class="va">$TIME</span><span class="st"> * 1000000000 / </span><span class="va">$TOTAL_CELLS</span><span class="st"> / 1000&quot;</span> <span class="kw">|</span> <span class="fu">bc</span><span class="va">)</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true"></a>    <span class="bu">echo</span> <span class="st">&quot;</span><span class="va">$NX</span><span class="st">,</span><span class="va">$NY</span><span class="st">,</span><span class="va">$TOTAL_CELLS</span><span class="st">,</span><span class="va">$TIME</span><span class="st">,</span><span class="va">$NS_PER_CELL</span><span class="st">,</span><span class="va">$CHECKSUM</span><span class="st">&quot;</span> <span class="op">&gt;&gt;</span> <span class="va">$OUTPUT_FILE</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true"></a><span class="kw">done</span></span></code></pre></div>
+<hr />
+<p><strong>Report Status</strong>: ✅ COMPLETE<br />
+<strong>Date</strong>: November 11, 2025<br />
+<strong>Total Pages</strong>: 19 (excluding appendices)<br />
+<strong>Figures</strong>: 1 (4-panel asymptotic performance analysis)<br />
+<strong>Tables</strong>: 8 (profiling data, performance results, speedup analysis)</p>

@@ -1,0 +1,60 @@
+======================================
+Asymptotic Performance Benchmark
+======================================
+
+Testing various grid sizes on full GPU (14 SMs)...
+Looking for point where ns/cell becomes constant
+
+Testing Grid: 64x64 (4096 cells)
+  Time: 0.2243076115846634s, ns/cell: 54.7626, Checksum: 95.29683677712327
+
+Testing Grid: 96x96 (9216 cells)
+  Time: 0.23163357377052307s, ns/cell: 25.1338, Checksum: 143.53018067820355
+
+Testing Grid: 128x128 (16384 cells)
+  Time: 0.2296310719102621s, ns/cell: 14.0155, Checksum: 257.311488287519
+
+Testing Grid: 192x192 (36864 cells)
+  Time: 0.23838655464351177s, ns/cell: 6.4666, Checksum: 578.4146248799386
+
+Testing Grid: 256x256 (65536 cells)
+  Time: 0.23336218670010567s, ns/cell: 3.5608, Checksum: 1038.9418329586078
+
+Testing Grid: 384x384 (147456 cells)
+  Time: 0.2347493264824152s, ns/cell: 1.5919, Checksum: 2354.6150274281117
+
+Testing Grid: 512x512 (262144 cells)
+  Time: 0.23139607720077038s, ns/cell: .8827, Checksum: 4117.908384293905
+
+Testing Grid: 768x768 (589824 cells)
+  Time: 0.23438082076609135s, ns/cell: .3973, Checksum: 9264.933737573405
+
+Testing Grid: 1024x1024 (1048576 cells)
+  Time: 0.4004953596740961s, ns/cell: .3819, Checksum: 16470.993291673225
+
+Testing Grid: 1536x1536 (2359296 cells)
+  Time: 0.8311595860868692s, ns/cell: .3522, Checksum: 37059.734906218946
+
+Testing Grid: 2048x2048 (4194304 cells)
+  Time: 1.433808820322156s, ns/cell: .3418, Checksum: 65883.97316661144
+
+======================================
+Asymptotic performance results saved to: asymptotic_performance_results.txt
+======================================
+
+Summary:
+Grid_NX,Grid_NY,Total_Cells,Time_sec,ns_per_cell,Checksum
+64,64,4096,0.2243076115846634,54.7626,95.29683677712327
+96,96,9216,0.23163357377052307,25.1338,143.53018067820355
+128,128,16384,0.2296310719102621,14.0155,257.311488287519
+192,192,36864,0.23838655464351177,6.4666,578.4146248799386
+256,256,65536,0.23336218670010567,3.5608,1038.9418329586078
+384,384,147456,0.2347493264824152,1.5919,2354.6150274281117
+512,512,262144,0.23139607720077038,.8827,4117.908384293905
+768,768,589824,0.23438082076609135,.3973,9264.933737573405
+1024,1024,1048576,0.4004953596740961,.3819,16470.993291673225
+1536,1536,2359296,0.8311595860868692,.3522,37059.734906218946
+2048,2048,4194304,1.433808820322156,.3418,65883.97316661144
+
+Look for the grid size where ns/cell stabilizes (becomes constant)
+This indicates the minimum workload for efficient GPU utilization

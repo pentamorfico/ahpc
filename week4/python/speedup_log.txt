@@ -1,0 +1,39 @@
+======================================
+CPU vs GPU Speedup Benchmark
+======================================
+
+Testing Grid: 128x128 (16384 cells)
+  Running CPU version...
+  Running GPU version...
+  CPU: 0.053517259657382965s, GPU: 0.12381604313850403s, Speedup: .43x
+
+Testing Grid: 256x256 (65536 cells)
+  Running CPU version...
+  Running GPU version...
+  CPU: 0.18251461535692215s, GPU: 0.1272950042039156s, Speedup: 1.43x
+
+Testing Grid: 512x512 (262144 cells)
+  Running CPU version...
+  Running GPU version...
+  CPU: 1.3971457928419113s, GPU: 0.12224285304546356s, Speedup: 11.42x
+
+Testing Grid: 768x768 (589824 cells)
+  Running CPU version...
+  Running GPU version...
+  CPU: 2.1064978018403053s, GPU: 0.12101162411272526s, Speedup: 17.40x
+
+Testing Grid: 1024x1024 (1048576 cells)
+  Running CPU version...
+  Running GPU version...
+  CPU: 4.317655039951205s, GPU: 0.201419023796916s, Speedup: 21.43x
+
+======================================
+Speedup results saved to: cpu_vs_gpu_speedup.txt
+======================================
+
+Grid_NX,Grid_NY,Total_Cells,CPU_Time_sec,GPU_Time_sec,Speedup,CPU_Checksum,GPU_Checksum
+128,128,16384,0.053517259657382965,0.12381604313850403,.43,261.64636191504053,261.64636191504053
+256,256,65536,0.18251461535692215,0.1272950042039156,1.43,1029.5348649133286,1029.5348649133286
+512,512,262144,1.3971457928419113,0.12224285304546356,11.42,4117.748322925413,4117.748322925414
+768,768,589824,2.1064978018403053,0.12101162411272526,17.40,9264.933726554742,9264.933726554742
+1024,1024,1048576,4.317655039951205,0.201419023796916,21.43,16470.993291652856,16470.993291652856
